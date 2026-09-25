@@ -59,15 +59,40 @@ def load_sp500() -> list[str]:
     return _sp500_df()["Symbol"].tolist()
 
 
-def _nasdaq100() -> list[str]:
+# รายชื่อสำรองเมื่อดึงจากเน็ตไม่ได้ (โดยประมาณ ณ ปี 2025 สมาชิกอาจเปลี่ยนตามรอบทบทวนของ Nasdaq)
+NASDAQ100_FALLBACK = (
+    "AAPL MSFT NVDA AMZN META GOOGL GOOG AVGO TSLA COST NFLX ASML TMUS CSCO PEP LIN ADBE AMD TXN QCOM INTU AMGN ISRG "
+    "BKNG HON AMAT CMCSA PDD VRTX ADP SBUX PANW GILD MU ADI LRCX MELI INTC KLAC REGN CDNS SNPS CRWD MAR PYPL CEG CTAS "
+    "MDLZ ORLY CSX ABNB DASH WDAY ADSK FTNT ROP NXPI MNST PCAR CPRT AEP KDP FANG PAYX ODFL ROST CHTR FAST EXC MRVL BKR "
+    "EA XEL TTWO CSGP GEHC DDOG IDXX VRSK CCEP ON LULU TEAM ZS DXCM CDW BIIB GFS MDB TTD ARM APP PLTR AXON SHOP CTSH KHC"
+).split()
+
+
+def _nasdaq100() -> tuple[list[str], str]:
+    """คืน (รายชื่อ, แหล่งที่มา) ลองหลายแหล่งตามลำดับ"""
     import io
 
-    tables = pd.read_html(io.StringIO(_get_html("https://en.wikipedia.org/wiki/Nasdaq-100")))
-    for t in tables:
-        for col in ("Ticker", "Symbol"):
-            if col in t.columns and 90 <= len(t) <= 110:
-                return [str(x).strip().replace(".", "-") for x in t[col].tolist()]
-    raise RuntimeError("ไม่พบตารางรายชื่อ Nasdaq-100")
+    errs = []
+    try:  # 1) API ทางการของ Nasdaq
+        import requests
+
+        r = requests.get("https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+                         headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, timeout=20)
+        r.raise_for_status()
+        rows = r.json()["data"]["data"]["rows"]
+        syms = [str(x["symbol"]).strip().replace(".", "-") for x in rows]
+        if len(syms) >= 90:
+            return syms, "Nasdaq.com"
+    except Exception as e:  # noqa: BLE001
+        errs.append(f"nasdaq.com: {e}")
+    try:  # 2) Wikipedia (หาตารางที่มีคอลัมน์ Ticker/Symbol ประมาณ 100 แถว)
+        for t in pd.read_html(io.StringIO(_get_html("https://en.wikipedia.org/wiki/Nasdaq-100"))):
+            for col in t.columns:
+                if str(col).strip() in ("Ticker", "Symbol") and 90 <= len(t) <= 115:
+                    return [str(x).strip().replace(".", "-") for x in t[col].tolist()], "Wikipedia"
+    except Exception as e:  # noqa: BLE001
+        errs.append(f"wikipedia: {e}")
+    return list(NASDAQ100_FALLBACK), "รายชื่อสำรองในแอพ (ประมาณ)"
 
 
 def _etf_holdings(etf: str) -> list[str]:
@@ -89,29 +114,23 @@ GROUPS = {
     "Semiconductor": ("SMH", ("sub", "Semiconductor")),
     "Health Care": ("XLV", ("sector", "Health Care")),
     "Energy": ("XLE", ("sector", "Energy")),
-    "Large Cap Growth": ("SCHG", "holdings"),
-    "Total World": ("VT", "holdings"),
-    "Total Intl ex-U.S.": ("VXUS", "holdings"),
 }
 
 
-def load_group(name: str) -> list[str]:
+def load_group(name: str) -> tuple[list[str], str]:
+    """คืน (รายชื่อ ticker, แหล่งข้อมูล)"""
     etf, how = GROUPS[name]
-    out = [etf]
+    out, src = [etf], "S&P 500 (Wikipedia)"
     if how == "nasdaq100":
-        try:
-            out += _nasdaq100()
-        except Exception:  # noqa: BLE001  ถ้าโหลดรายชื่อเต็มไม่ได้ ใช้หุ้นหลักใน QQQM แทน
-            out += _etf_holdings(etf)
-    elif how == "holdings":
-        out += _etf_holdings(etf)
+        lst, src = _nasdaq100()
+        out += lst
     else:
         kind, key = how
         df = _sp500_df()
         col = "GICS Sector" if kind == "sector" else "GICS Sub-Industry"
         out += df[df[col].astype(str).str.contains(key, case=False)]["Symbol"].tolist()
         out += _etf_holdings(etf)  # เพิ่มหุ้นนอก S&P 500 ที่กองทุนถือ เช่น TSM, ASML
-    return list(dict.fromkeys(out))
+    return list(dict.fromkeys(out)), src
 
 
 # ------------------------------------------------------------------ helpers

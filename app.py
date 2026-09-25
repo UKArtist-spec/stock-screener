@@ -28,24 +28,24 @@ st.markdown("""<style>
 with st.sidebar:
     st.header("ตั้งค่า")
     demo = st.toggle("โหมดข้อมูลจำลอง (demo)", value=DEMO_ENV, help="ใช้ทดสอบหน้าตาแอพ ไม่ใช่ข้อมูลจริง")
-    c1, c2 = st.columns(2)
-    if c1.button("ใช้ S&P 500", help="โหลดหุ้น ~500 ตัว ครั้งแรกใช้เวลาหลายนาที และอาจถูก Yahoo จำกัดความเร็ว"):
-        try:
-            st.session_state["universe"] = " ".join(D.load_sp500())
-        except Exception as e:  # noqa: BLE001
-            st.error(str(e))
-    if c2.button("ค่าเริ่มต้น", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
-        st.session_state.pop("universe", None)
-    st.markdown("**โหลดหุ้นตามกลุ่ม**")
+    st.markdown("**โหลดรายชื่อหุ้น**")
+
+    def _load(label, fn):
+        with st.spinner(f"กำลังโหลด {label}..."):
+            try:
+                lst, src = fn()
+                st.session_state["universe"] = " ".join(lst)
+                st.toast(f"โหลด {label} แล้ว {len(lst)} ตัว · แหล่งข้อมูล: {src}")
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+
+    if st.button("S&P 500", key="grp_sp500", width="stretch", help="หุ้น ~500 ตัว ครั้งแรกใช้เวลาหลายนาที"):
+        _load("S&P 500", lambda: (D.load_sp500(), "Wikipedia/GitHub"))
     for name in D.GROUPS:
         if st.button(name, key=f"grp_{name}", width="stretch", help=f"ETF อ้างอิง: {D.GROUPS[name][0]}"):
-            with st.spinner(f"กำลังโหลดกลุ่ม {name}..."):
-                try:
-                    lst = D.load_group(name)
-                    st.session_state["universe"] = " ".join(lst)
-                    st.toast(f"โหลดกลุ่ม {name} แล้ว {len(lst)} ตัว")
-                except Exception as e:  # noqa: BLE001
-                    st.error(str(e))
+            _load(name, lambda n=name: D.load_group(n))
+    if st.button("ค่าเริ่มต้น", key="grp_default", width="stretch", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
+        st.session_state.pop("universe", None)
     universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
