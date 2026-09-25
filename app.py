@@ -1,0 +1,158 @@
+"""Quality-Growth Screener: จัดอันดับหุ้น/ETF สหรัฐตามเกณฑ์ 8 ข้อ
+รัน:  streamlit run app.py
+"""
+import os
+
+import pandas as pd
+import streamlit as st
+
+import data as D
+import scoring as S
+
+st.set_page_config(page_title="Quality Growth Screener", layout="wide")
+DEMO_ENV = os.environ.get("DEMO") == "1"
+
+# ------------------------------------------------------------------ Sidebar
+with st.sidebar:
+    st.header("ตั้งค่า")
+    demo = st.toggle("โหมดข้อมูลจำลอง (demo)", value=DEMO_ENV, help="ใช้ทดสอบหน้าตาแอพ ไม่ใช่ข้อมูลจริง")
+    if st.button("โหลดรายชื่อ S&P 500 ทั้งหมด"):
+        try:
+            st.session_state["universe"] = " ".join(D.load_sp500())
+        except Exception as e:  # noqa: BLE001
+            st.error(f"โหลดไม่สำเร็จ: {e}")
+    universe_txt = st.text_area("รายชื่อ ticker (คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
+    tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
+    st.subheader("น้ำหนักเกณฑ์")
+    weights = {k: st.slider(k, 0, 30, S.DEFAULT_WEIGHTS[k]) for k in S.CRITERIA}
+    refresh = st.select_slider("รีเฟรชราคาทุก (วินาที)", [15, 30, 60, 120, 300], value=60)
+    min_score = st.slider("คะแนนรวมขั้นต่ำ", 0, 90, 0)
+
+st.title("Quality Growth Screener")
+st.caption("ข้อมูลงบการเงินอัปเดตรายปี/ไตรมาส (แคช 12 ชม.) ส่วนราคารีเฟรชอัตโนมัติ · Yahoo ฟรีดีเลย์ประมาณ 15 นาที · ไม่ใช่คำแนะนำการลงทุน")
+
+
+# ------------------------------------------------------------------ Data
+@st.cache_data(ttl=12 * 3600, show_spinner="กำลังดึงงบการเงิน...")
+def get_fundamentals(tickers: tuple, demo: bool) -> dict:
+    d = D.fetch_many(list(tickers), demo)
+    # ETF: ดึงหุ้นใน top holdings เพิ่มเพื่อทำ look-through
+    extra = {s for v in d.values() if v.get("holdings") for s in v["holdings"]} - set(d)
+    if extra:
+        d.update(D.fetch_many(sorted(extra), demo))
+    return d
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_quotes(tickers: tuple, demo: bool) -> pd.DataFrame:
+    return D.fetch_quotes(list(tickers), demo)
+
+
+moat = D.load_moat_tags()
+
+
+def score_entry(t: str, fund: dict) -> dict | None:
+    d = fund.get(t)
+    if not d or d.get("error"):
+        return None
+    if d["type"] == "ETF":
+        hold = {s: w for s, w in (d.get("holdings") or {}).items() if s in fund and fund[s]["type"] == "EQUITY"}
+        if not hold:
+            return None
+        tw = sum(hold.values())
+        agg = {k: 0.0 for k in S.CRITERIA}
+        cw = {k: 0.0 for k in S.CRITERIA}
+        for s, w in hold.items():
+            r = S.score_stock(fund[s]["fin"], fund[s]["info"], moat.get(s))
+            for k, v in r["scores"].items():
+                if v is not None:
+                    agg[k] += v * w
+                    cw[k] += w
+        scores = {k: (agg[k] / cw[k] if cw[k] else None) for k in S.CRITERIA}
+        return {"scores": scores, "metrics": {"Moat": f"look-through {len(hold)} ตัวใหญ่สุด (ครอบคลุม {tw*100:.0f}% ของพอร์ต)"}}
+    return S.score_stock(d["fin"], d["info"], moat.get(t))
+
+
+fund = get_fundamentals(tuple(tickers), demo)
+scored = {t: score_entry(t, fund) for t in tickers}
+scored = {t: v for t, v in scored.items() if v}
+failed = [t for t in tickers if t not in scored]
+
+tab1, tab2, tab3 = st.tabs(["Screener", "รายละเอียดรายตัว", "วิธีคิดคะแนน"])
+
+# ------------------------------------------------------------------ Tab 1
+with tab1:
+    period = st.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
+                      help="รายวัน = เรียงตามคะแนน แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน และระยะห่างจากจุดสูงสุด 52 สัปดาห์")
+    only_buy = st.checkbox("แสดงเฉพาะ 'น่าซื้อ' (คะแนนรวม >= 70 และ Valuation >= 50)")
+
+    @st.fragment(run_every=refresh)
+    def table():
+        q = get_quotes(tuple(scored), demo)
+        rows = []
+        for t, r in scored.items():
+            tot = S.total_score(r["scores"], weights)
+            row = {"Ticker": t, "ชื่อ": fund[t]["name"], "ประเภท": fund[t]["type"], "คะแนนรวม": tot,
+                   "สถานะ": S.rating(tot, r["scores"].get("Valuation"))}
+            row.update({k: r["scores"].get(k) for k in S.CRITERIA})
+            if t in q.index:
+                row.update(q.loc[t].to_dict())
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        df = df[df["คะแนนรวม"].notna() & (df["คะแนนรวม"] >= min_score)]
+        if only_buy:
+            df = df[df["สถานะ"] == "น่าซื้อ"]
+        df = df.sort_values("คะแนนรวม", ascending=False).reset_index(drop=True)
+        df.index += 1
+        move = ["Today %"] if period == "รายวัน" else ["1M %", "From 52w high %"]
+        cols = ["Ticker", "ชื่อ", "ประเภท", "คะแนนรวม", "สถานะ", "Price"] + [c for c in move if c in df] + S.CRITERIA
+        cfg = {c: st.column_config.ProgressColumn(c, min_value=0, max_value=100, format="%.0f") for c in ["คะแนนรวม"] + S.CRITERIA}
+        cfg.update({c: st.column_config.NumberColumn(c, format="%.2f%%") for c in move})
+        cfg["Price"] = st.column_config.NumberColumn("ราคา", format="$%.2f")
+        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored)} ตัว")
+        st.dataframe(df[cols], column_config=cfg, width="stretch", height=560)
+
+    table()
+    if failed:
+        st.warning(f"ดึงข้อมูลไม่ได้/ข้อมูลไม่พอ: {', '.join(failed)}")
+
+# ------------------------------------------------------------------ Tab 2
+with tab2:
+    if scored:
+        pick = st.selectbox("เลือกตัว", list(scored))
+        r = scored[pick]
+        tot = S.total_score(r["scores"], weights)
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", S.rating(tot, r["scores"].get("Valuation")))
+            st.bar_chart(pd.Series({k: (v or 0) for k, v in r["scores"].items()}), horizontal=True)
+        with c2:
+            st.subheader("ตัวเลขที่ใช้")
+            m = pd.DataFrame({"ค่า": {k: (f"{v:.2f}" if isinstance(v, float) else v) for k, v in r["metrics"].items() if v is not None}})
+            st.dataframe(m, width="stretch")
+            missing = [k for k, v in r["scores"].items() if v is None]
+            if missing:
+                st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
+
+# ------------------------------------------------------------------ Tab 3
+with tab3:
+    st.markdown("""
+**แต่ละเกณฑ์ให้คะแนน 0-100 แล้วถ่วงน้ำหนักตามแถบด้านซ้าย** (ใช้งบรายปีย้อนหลัง ~4 ปีจาก Yahoo Finance)
+
+| เกณฑ์ | ตัววัด | ได้คะแนนเต็มเมื่อ |
+|---|---|---|
+| Revenue Growth | CAGR รายได้ | >= 15% (10% ได้ ~70) |
+| EPS Growth | CAGR EPS | >= 18% (12% ได้ ~70) ขาดทุน = 0 |
+| ROIC | NOPAT / (หนี้+ทุน-เงินสด) เฉลี่ย หักคะแนนถ้าผันผวน | เฉลี่ย >= 25% และนิ่ง |
+| Margin | Operating margin ล่าสุด 60% + แนวโน้มขยาย 40% | >= 30% และขยายตัว |
+| FCF | CAGR FCF 60% + สัดส่วนปีที่ FCF โต 40% | CAGR >= 15% โตทุกปี, FCF ติดลบ = ต่ำ |
+| Balance Sheet | หนี้สุทธิ / FCF (กี่ปีล้างหนี้) + interest coverage | เงินสดสุทธิ |
+| Moat | แท็กที่คุณระบุใน moat.json 50% + proxy (Gross margin สูงและนิ่ง, ROIC) 50% | มีหลายแท็ก + margin/ROIC สูง |
+| Valuation | PEG (Forward P/E / EPS growth) 60% + FCF yield 40% | PEG <= 1 และ FCF yield >= 6% |
+
+**สถานะ:** 'น่าซื้อ' = คะแนนรวม >= 70 และ Valuation >= 50 · 'คุณภาพดี แต่ราคาตึง' = คะแนนรวม >= 70 แต่ Valuation ต่ำ · 'น่าติดตาม' = 55-70
+
+**ETF:** ให้คะแนนแบบ look-through คือถัวเฉลี่ยตามน้ำหนักของหุ้น top holdings (ตามที่ Yahoo ให้ ปกติ ~10 ตัว)
+
+**ข้อจำกัดที่ควรรู้:** Moat วัดจากตัวเลขตรง ๆ ไม่ได้ จึงพึ่งวิจารณญาณของคุณ · งบรายปีของ Yahoo มีแค่ ~4 ปี CAGR จึงเป็น 3 ช่วง · เกณฑ์ 'ระยะยาว' ในความคิดคุณอาจอยากดู 5-10 ปี ซึ่งต้องเปลี่ยนแหล่งข้อมูล
+""")
