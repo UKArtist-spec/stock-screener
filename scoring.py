@@ -11,7 +11,7 @@ CRITERIA = ["Revenue Growth", "EPS Growth", "ROIC", "Margin", "FCF", "Balance Sh
 
 DEFAULT_WEIGHTS = {
     "Revenue Growth": 12, "EPS Growth": 12, "ROIC": 15, "Margin": 10,
-    "FCF": 13, "Balance Sheet": 10, "Moat": 13, "Valuation": 15,
+    "FCF": 15, "Balance Sheet": 8, "Moat": 10, "Valuation": 18,
 }
 
 
@@ -157,10 +157,11 @@ def score_moat(fin, manual_tags: list[str] | None):
 
 def score_valuation(fin, info, eps_g, rev_g):
     pe = info.get("forwardPE") or info.get("trailingPE")
-    growth = eps_g if eps_g is not None else rev_g
+    gs = [g for g in (eps_g, rev_g) if g is not None and g > 0]
+    growth = sum(gs) / len(gs) if gs else None  # เฉลี่ยโต EPS กับรายได้ กันหุ้นที่โตพุ่งปีเดียวดูถูกเกินจริง
     peg = None
-    if pe and pe > 0 and growth and growth > 0:
-        peg = pe / min(growth, 40)
+    if pe and pe > 0 and growth:
+        peg = pe / min(growth, 30)
     peg_s = interp(peg, [0.8, 1.2, 2, 3], [100, 75, 35, 0]) if peg is not None else None
     if pe and pe > 0 and peg is None:
         peg_s = 10.0  # มี P/E แต่ไม่โต -> ไม่มีเหตุผลจ่ายแพง
@@ -169,7 +170,7 @@ def score_valuation(fin, info, eps_g, rev_g):
     if f is not None and not f.dropna().empty and mc:
         fy = float(f.dropna().iloc[-1]) / mc * 100
     fy_s = interp(fy, [0, 2, 4, 7], [0, 35, 70, 100]) if fy is not None else None
-    parts = [(peg_s, 0.6), (fy_s, 0.4)]
+    parts = [(peg_s, 0.4), (fy_s, 0.6)]
     parts = [(s, w) for s, w in parts if s is not None]
     if not parts:
         return None, None
@@ -177,23 +178,70 @@ def score_valuation(fin, info, eps_g, rev_g):
     return sum(s * w for s, w in parts) / tw, peg
 
 
+# ---------------------------------------------------------------- คุณภาพของ FCF / การเจือจางหุ้น
+def fcf_quality(fin):
+    """(คะแนนที่ถูกหัก, SBC/FCF, FCF/กำไรสุทธิ) หักเมื่อ FCF พึ่ง SBC มาก หรือแปลงเป็นกำไรจริงได้ต่ำ"""
+    f, sbc, ni = fin.get("fcf"), fin.get("sbc"), fin.get("net_income")
+    if f is None or f.dropna().empty or float(f.dropna().iloc[-1]) <= 0:
+        return 0.0, None, None
+    fl = float(f.dropna().iloc[-1])
+    pen, ratio, conv = 0.0, None, None
+    if sbc is not None and not sbc.dropna().empty:
+        ratio = abs(float(sbc.dropna().iloc[-1])) / fl
+        if ratio > 0.15:
+            pen += min(20.0, (ratio - 0.15) * 50)
+    if ni is not None and not ni.dropna().empty and float(ni.dropna().iloc[-1]) > 0:
+        conv = fl / float(ni.dropna().iloc[-1])
+        if conv < 0.7:
+            pen += min(10.0, (0.7 - conv) * 25)
+    return min(25.0, pen), ratio, conv
+
+
+def share_change(fin):
+    """อัตราเปลี่ยนจำนวนหุ้นต่อปี (%) บวก = เจือจาง ลบ = ซื้อหุ้นคืน"""
+    sh = fin.get("shares")
+    if sh is None:
+        return None
+    sh = sh.dropna()
+    if len(sh) < 3 or float(sh.iloc[0]) <= 0 or float(sh.iloc[-1]) <= 0:
+        return None
+    return ((float(sh.iloc[-1]) / float(sh.iloc[0])) ** (1 / (len(sh) - 1)) - 1) * 100
+
+
 # ---------------------------------------------------------------- รวมคะแนน
 def score_stock(fin: dict, info: dict, manual_tags: list[str] | None = None) -> dict:
+    financial = info.get("sector") == "Financial Services"  # ธนาคาร/ประกัน: ROIC, FCF, หนี้ ใช้วัดไม่ได้
+    if financial:
+        fin = {**fin, "fcf": None}
     rev_s, rev_g = score_revenue(fin)
     eps_s, eps_g = score_eps(fin)
+    dil = share_change(fin)
+    if eps_s is not None and dil is not None and eps_s > 0:
+        if dil > 1:
+            eps_s = max(0.0, eps_s - min(15.0, (dil - 1) * 5))
+        elif dil < 0:
+            eps_s = min(100.0, eps_s + min(5.0, -dil * 2))
     roic_s, roic_avg = score_roic(fin)
     mar_s, mar_v = score_margin(fin)
     fcf_s, fcf_g = score_fcf(fin)
+    pen, sbc_ratio, conv = fcf_quality(fin)
+    if fcf_s is not None:
+        fcf_s = max(0.0, fcf_s - pen)
     bs_s, years = score_balance(fin)
     moat_s, moat_note = score_moat(fin, manual_tags)
     val_s, peg = score_valuation(fin, info, eps_g, rev_g)
+    if financial:
+        roic_s = mar_s = fcf_s = bs_s = None
+    pct = lambda x: None if x is None else x * 100  # noqa: E731
     return {
         "scores": {"Revenue Growth": rev_s, "EPS Growth": eps_s, "ROIC": roic_s, "Margin": mar_s,
                    "FCF": fcf_s, "Balance Sheet": bs_s, "Moat": moat_s, "Valuation": val_s},
         "metrics": {"Revenue CAGR %": rev_g, "EPS CAGR %": eps_g, "ROIC avg %": roic_avg,
                     "Op margin %": mar_v, "FCF CAGR %": fcf_g, "ปีที่ FCF ล้างหนี้สุทธิ": years,
+                    "จำนวนหุ้นเปลี่ยน %/ปี": dil, "SBC / FCF %": pct(sbc_ratio), "FCF / กำไรสุทธิ %": pct(conv),
                     "Moat": moat_note, "PEG": peg,
-                    "Forward P/E": info.get("forwardPE"), "Trailing P/E": info.get("trailingPE")},
+                    "Forward P/E": info.get("forwardPE"), "Trailing P/E": info.get("trailingPE"),
+                    "หมายเหตุ": "กลุ่มการเงิน: ตัด ROIC, Margin, FCF, Balance Sheet ออกจากคะแนน" if financial else None},
     }
 
 
@@ -206,16 +254,36 @@ def total_score(scores: dict, weights: dict) -> float | None:
     return sum(s * w for s, w in pairs) / tw
 
 
+TOP = "ผ่านเกณฑ์เด่น"
+QUALITY_PRICEY = "คุณภาพดี แต่ราคาตึง"
+
+
 def rating(total: float | None, val_score: float | None) -> str:
     if total is None:
         return "ข้อมูลไม่พอ"
     if total >= 75 and (val_score or 0) >= 60:
-        return "น่าซื้อ"
+        return TOP
     if total >= 75:
-        return "คุณภาพดี แต่ราคาตึง"
+        return QUALITY_PRICEY
     if total >= 60:
         return "น่าติดตาม"
     return "ไม่ผ่านเกณฑ์"
+
+
+ZONE = "ย่อตัวเข้าโซน"
+
+
+def timing(from_high, vs_ma200, rsi) -> str:
+    """จังหวะราคา (แยกจากคะแนนคุณภาพ): ดูระยะย่อจากจุดสูงสุด 52 สัปดาห์, แนวโน้มเทียบ MA200, RSI"""
+    if from_high is None or pd.isna(from_high):
+        return "-"
+    if vs_ma200 is not None and not pd.isna(vs_ma200) and vs_ma200 < 0:
+        return "ต่ำกว่า MA200 (ระวัง)"
+    if from_high >= -8:
+        return "ใกล้จุดสูงสุด"
+    if from_high >= -25:
+        return ZONE + (" (RSI ต่ำ)" if rsi is not None and not pd.isna(rsi) and rsi < 40 else "")
+    return "ย่อลึก ตรวจสอบสาเหตุ"
 
 
 def highlights(scores: dict, hi: float = 85, lo: float = 45) -> str:

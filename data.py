@@ -151,7 +151,15 @@ def _fetch_real(ticker: str) -> dict:
     t = yf.Ticker(ticker)
     info = t.info or {}
     out = {"ticker": ticker, "info": info, "type": info.get("quoteType", "EQUITY"),
-           "name": info.get("shortName") or info.get("longName") or ticker, "fin": {}, "holdings": None}
+           "name": info.get("shortName") or info.get("longName") or ticker, "fin": {}, "holdings": None,
+           "next_earnings": None}
+    try:  # วันประกาศงบครั้งถัดไป
+        cal = t.calendar
+        ed = cal.get("Earnings Date") if isinstance(cal, dict) else None
+        if ed:
+            out["next_earnings"] = str(list(ed)[0])
+    except Exception:  # noqa: BLE001
+        pass
     if out["type"] == "ETF":
         try:
             h = t.funds_data.top_holdings
@@ -172,6 +180,9 @@ def _fetch_real(ticker: str) -> dict:
         "cash": _row(bal, "Cash Cash Equivalents And Short Term Investments", "Cash And Cash Equivalents"),
         "invested_capital": _row(bal, "Invested Capital"),
         "fcf": _row(cf, "Free Cash Flow"),
+        "sbc": _row(cf, "Stock Based Compensation"),
+        "net_income": _row(inc, "Net Income", "Net Income Common Stockholders"),
+        "shares": _row(inc, "Diluted Average Shares", "Basic Average Shares"),
     }
     if fin["invested_capital"] is None:
         eq = _row(bal, "Stockholders Equity", "Total Equity Gross Minority Interest")
@@ -200,7 +211,7 @@ def _fetch_demo(ticker: str) -> dict:
         picks = ["MSFT", "AAPL", "NVDA", "AMZN", "GOOGL"]
         w = rng.dirichlet(np.ones(5)) * 0.4
         return {"ticker": ticker, "info": {"quoteType": "ETF"}, "type": "ETF", "name": f"{ticker} (demo ETF)",
-                "fin": {}, "holdings": dict(zip(picks, map(float, w)))}
+                "fin": {}, "holdings": dict(zip(picks, map(float, w))), "next_earnings": None}
     g = rng.uniform(0.0, 0.25)
     rev = series(rng.uniform(5e9, 2e11), g)
     margin = rng.uniform(0.05, 0.4)
@@ -212,10 +223,14 @@ def _fetch_demo(ticker: str) -> dict:
         "ebit": ebit, "gross_profit": rev * rng.uniform(0.3, 0.8), "tax_provision": ebit * 0.18,
         "pretax_income": ebit, "interest_expense": debt * 0.04, "total_debt": debt, "cash": cash,
         "invested_capital": rev * rng.uniform(0.25, 0.8), "fcf": ebit * rng.uniform(0.6, 0.9) * np.linspace(0.85, 1.1, 4),
+        "sbc": ebit * rng.uniform(0.02, 0.3), "net_income": ebit * 0.8,
+        "shares": series(rng.uniform(5e8, 5e9), rng.uniform(-0.02, 0.03), 0.005),
     }
-    info = {"quoteType": "EQUITY", "forwardPE": float(rng.uniform(15, 55)),
+    sectors = ["Technology", "Healthcare", "Financial Services", "Consumer Cyclical", "Energy", "Industrials"]
+    info = {"quoteType": "EQUITY", "sector": sectors[int(rng.integers(0, len(sectors)))], "forwardPE": float(rng.uniform(15, 55)),
             "trailingPE": float(rng.uniform(15, 60)), "marketCap": float(rev.iloc[-1] * rng.uniform(4, 14))}
-    return {"ticker": ticker, "info": info, "type": "EQUITY", "name": f"{ticker} (demo)", "fin": fin, "holdings": None}
+    return {"ticker": ticker, "info": info, "type": "EQUITY", "name": f"{ticker} (demo)", "fin": fin, "holdings": None,
+            "next_earnings": (pd.Timestamp.now() + pd.Timedelta(days=int(rng.integers(2, 80)))).date().isoformat()}
 
 
 def fetch_one(ticker: str, demo: bool = False) -> dict:
@@ -231,15 +246,26 @@ def fetch_many(tickers: list[str], demo: bool = False, workers: int = 8) -> dict
 
 
 # ------------------------------------------------------------------ ราคา
+def _vs_ma200(s: pd.Series):
+    return float((s.iloc[-1] / s.rolling(200).mean().iloc[-1] - 1) * 100) if len(s) >= 200 else float("nan")
+
+
+def _rsi(s: pd.Series, n: int = 14):
+    d = s.diff()
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    return float(100 - 100 / (1 + up.iloc[-1] / dn.iloc[-1])) if dn.iloc[-1] else 100.0
+
+
 def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
     """ราคาล่าสุด + % เปลี่ยนแปลงวันนี้ / 1 เดือน / ห่างจากจุดสูงสุด 52 สัปดาห์ (Yahoo ฟรีดีเลย์ ~15 นาที)"""
-    cols = ["Price", "Today %", "1M %", "From 52w high %", "1Y trend"]
+    cols = ["Price", "Today %", "1M %", "From 52w high %", "1Y trend", "vs MA200 %", "RSI"]
     if demo:
         rows = {}
         for t in tickers:
             r = np.random.default_rng(zlib.crc32(t.encode()) + int(pd.Timestamp.now().timestamp() // 30))
             rows[t] = [float(r.uniform(50, 600)), float(r.normal(0, 1.2)), float(r.normal(1, 5)), float(-abs(r.normal(8, 8))),
-                        list(np.cumsum(r.normal(0.2, 2, 60)) + 100)]
+                        list(np.cumsum(r.normal(0.2, 2, 60)) + 100), float(r.normal(4, 10)), float(r.uniform(25, 75))]
         return pd.DataFrame.from_dict(rows, orient="index", columns=cols)
     import yfinance as yf
 
@@ -252,5 +278,5 @@ def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
         if len(s) < 25:
             continue
         rows[t] = [float(s.iloc[-1]), (s.iloc[-1] / s.iloc[-2] - 1) * 100, (s.iloc[-1] / s.iloc[-22] - 1) * 100,
-                   (s.iloc[-1] / s.max() - 1) * 100, s.iloc[-260:].iloc[::5].round(2).tolist()]
+                   (s.iloc[-1] / s.max() - 1) * 100, s.iloc[-260:].iloc[::5].round(2).tolist(), _vs_ma200(s), _rsi(s)]
     return pd.DataFrame.from_dict(rows, orient="index", columns=cols)

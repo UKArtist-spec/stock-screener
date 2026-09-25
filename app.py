@@ -1,6 +1,7 @@
 """Quality-Growth Screener: จัดอันดับหุ้น/ETF สหรัฐตามเกณฑ์ 8 ข้อ
 รัน:  streamlit run app.py
 """
+import html as _html
 import json
 import os
 
@@ -26,6 +27,11 @@ st.markdown("""<style>
 [data-testid="stMetric"] {background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.02));
     border: 1px solid rgba(255,255,255,.10); border-radius: 12px; padding: 12px 16px;}
 [data-testid="stMetricValue"] {font-size: 1.9rem;}
+.pick {background: linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px; padding: 14px 16px; text-align: left; min-height: 178px;}
+.pk-t {font-size: 1.35rem; font-weight: 700;} .pk-n {font-size: .78rem; opacity: .65; height: 1.1rem; overflow: hidden; white-space: nowrap;}
+.pk-s {font-size: 2.3rem; font-weight: 800; line-height: 1.25;} .pk-r {font-size: .85rem; font-weight: 600;}
+.pk-m {font-size: .78rem; opacity: .8; margin-top: 2px;} .pk-p {font-size: .9rem; margin-top: 6px;}
 </style>""", unsafe_allow_html=True)
 
 
@@ -157,69 +163,151 @@ scored = {t: v for t, v in scored.items() if v}
 others = [t for t in tickers if t not in scored and fund.get(t, {}).get("type") == "ETF"]  # ETF ทอง/พันธบัตร ไม่มีงบให้ประเมิน
 failed = [t for t in tickers if t not in scored and t not in others]
 
-# ------------------------------------------------------------------ KPI
+EXCH = {"NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NYQ": "NYSE", "PCX": "AMEX", "ASE": "AMEX", "BTS": "BATS"}
+
+
+def tv_full(t: str) -> str:
+    ex = EXCH.get((fund.get(t, {}).get("info") or {}).get("exchange"))
+    sym = tv_symbol(t)
+    return f"{ex}:{sym}" if ex else sym
+
+
+def sector_of(t: str) -> str:
+    d = fund[t]
+    return "ETF" if d["type"] == "ETF" else (d["info"].get("sector") or "อื่น ๆ")
+
+
+def earnings_of(t: str) -> str:
+    try:
+        dt = pd.Timestamp(fund[t].get("next_earnings")).normalize()
+        days = (dt - pd.Timestamp.now().normalize()).days
+    except Exception:  # noqa: BLE001
+        return "-"
+    return f"{dt:%d %b} (อีก {days} วัน)" if days >= 0 else "-"
+
+
+def timing_of(t: str, q) -> str:
+    if t not in q.index:
+        return "-"
+    r = q.loc[t]
+    return S.timing(r.get("From 52w high %"), r.get("vs MA200 %"), r.get("RSI"))
+
+
+q_all = get_quotes(tuple(list(scored) + others), demo)
+all_sectors = sorted({sector_of(t) for t in list(scored) + others})
+with st.sidebar:
+    sector_sel = st.multiselect("กรองกลุ่มอุตสาหกรรม", all_sectors, placeholder="ทั้งหมด")
+
+
+def in_sector(t: str) -> bool:
+    return not sector_sel or sector_of(t) in sector_sel
+
+
+# ------------------------------------------------------------------ KPI + Top 5
 tots = {t: S.total_score(r["scores"], weights) for t, r in scored.items()}
 ratings = {t: S.rating(tots[t], scored[t]["scores"].get("Valuation")) for t in scored}
-valid = [v for v in tots.values() if v is not None]
+vis = [t for t in scored if in_sector(t)]
+top_now = [t for t in vis if ratings[t] == S.TOP]
+zone_now = [t for t in top_now if timing_of(t, q_all).startswith(S.ZONE)]
+valid = [tots[t] for t in vis if tots[t] is not None]
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("สแกนทั้งหมด", len(scored) + len(others))
-k2.metric("น่าซื้อ", sum(1 for v in ratings.values() if v == "น่าซื้อ"))
-k3.metric("คุณภาพดี แต่ราคาตึง", sum(1 for v in ratings.values() if v == "คุณภาพดี แต่ราคาตึง"))
+k1.metric("สแกนทั้งหมด", len(vis) + len([o for o in others if in_sector(o)]))
+k2.metric("ผ่านเกณฑ์เด่น", len(top_now), help="คะแนนรวม >= 75 และ Valuation >= 60")
+k3.metric("เด่น + ย่อเข้าโซน", len(zone_now), help="ผ่านเกณฑ์เด่น และราคาย่อจากจุดสูงสุด 8-25% โดยยังเหนือ MA200")
 k4.metric("คะแนนเฉลี่ย", f"{sum(valid) / len(valid):.0f}" if valid else "-")
 
-tab1, tab_heat, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "วิธีคิดคะแนน"])
+top5 = sorted([t for t in vis if tots[t] is not None], key=lambda t: -tots[t])[:5]
+if top5:
+    st.markdown("##### Top 5 คะแนนสูงสุด")
+    cols5 = st.columns(5)
+    for c, t in zip(cols5, top5):
+        tot = tots[t]
+        col = "#2ea043" if tot >= 75 else ("#d29922" if tot >= 55 else "#f85149")
+        price = chg = None
+        if t in q_all.index:
+            price, chg = q_all.loc[t, "Price"], q_all.loc[t, "Today %"]
+        pline = "" if price is None else (f'${price:,.2f} <span style="color:{"#2ea043" if chg >= 0 else "#f85149"}">{chg:+.2f}%</span>')
+        c.markdown(f'<div class="pick"><div class="pk-t">{_html.escape(t)}</div><div class="pk-n">{_html.escape(fund[t]["name"])}</div>'
+                   f'<div class="pk-s" style="color:{col}">{tot:.0f}</div><div class="pk-r">{ratings[t]}</div>'
+                   f'<div class="pk-m">{timing_of(t, q_all)}</div><div class="pk-p">{pline}</div></div>', unsafe_allow_html=True)
+        if c.button("ดูกราฟ + ข่าว", key=f"pick_{t}", width="stretch"):
+            st.session_state["sel"] = t
+
+tab1, tab_heat, tab_news, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "ข่าวตลาด", "วิธีคิดคะแนน"])
 
 # ------------------------------------------------------------------ Tab 1
 with tab1:
-    period = st.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
-                      help="รายวัน = เรียงตามคะแนน แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน และระยะห่างจากจุดสูงสุด 52 สัปดาห์")
-    only_buy = st.checkbox("แสดงเฉพาะ 'น่าซื้อ' (คะแนนรวม >= 75 และ Valuation >= 60)")
+    o1, o2, o3 = st.columns([1.2, 1, 1])
+    period = o1.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
+                      help="รายวัน = แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน (ทั้งสองแบบมีระยะห่างจาก High 52 สัปดาห์)")
+    compact = o2.toggle("โหมดตารางย่อ", value=True, help="ซ่อนคอลัมน์คะแนน 8 เกณฑ์ (ดูรายละเอียดได้ในกราฟเรดาร์ตอนคลิกแถว)")
+    only_buy = o3.checkbox("เฉพาะ 'ผ่านเกณฑ์เด่น'", help="คะแนนรวม >= 75 และ Valuation >= 60")
+    only_zone = o3.checkbox("เฉพาะที่ย่อเข้าโซน", help="ราคาย่อจากจุดสูงสุด 8-25% และยังเหนือ MA200")
 
     @st.fragment(run_every=refresh)
     def table():
         q = get_quotes(tuple(list(scored) + others), demo)
-        rows = []
-        for t, r in scored.items():
-            tot = S.total_score(r["scores"], weights)
-            row = {"Ticker": t, "ชื่อ": fund[t]["name"], "คะแนนรวม": tot,
-                   "สถานะ": S.rating(tot, r["scores"].get("Valuation")),
-                   "จุดเด่น / จุดอ่อน": S.highlights(r["scores"])}
-            row.update({k: r["scores"].get(k) for k in S.CRITERIA})
+
+        def base_row(t):
+            row = {"Ticker": t, "ชื่อ": fund[t]["name"], "กลุ่ม": sector_of(t), "ประกาศงบ": earnings_of(t),
+                   "จังหวะราคา": timing_of(t, q)}
             if t in q.index:
                 row.update(q.loc[t].to_dict())
+            return row
+
+        rows = []
+        for t, r in scored.items():
+            if not in_sector(t):
+                continue
+            tot = S.total_score(r["scores"], weights)
+            row = base_row(t)
+            row.update({"คะแนนรวม": tot, "สถานะ": S.rating(tot, r["scores"].get("Valuation")),
+                        "จุดเด่น / จุดอ่อน": S.highlights(r["scores"])})
+            row.update({k: r["scores"].get(k) for k in S.CRITERIA})
             rows.append(row)
-        df = pd.DataFrame(rows)
-        df = df[df["คะแนนรวม"].notna() & (df["คะแนนรวม"] >= min_score)]
+        df = pd.DataFrame(rows, columns=None) if rows else pd.DataFrame(columns=["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา"])
+        if not df.empty:
+            df = df[df["คะแนนรวม"].notna() & (df["คะแนนรวม"] >= min_score)]
+            if only_buy:
+                df = df[df["สถานะ"] == S.TOP]
+            if only_zone:
+                df = df[df["จังหวะราคา"].astype(str).str.startswith(S.ZONE)]
+            df = df.sort_values("คะแนนรวม", ascending=False)
         extra = []
-        if min_score == 0 and not only_buy:
+        if min_score == 0 and not only_buy and not only_zone:
             for t in others:
-                row = {"Ticker": t, "ชื่อ": fund[t]["name"], "คะแนนรวม": float("nan"),
-                       "สถานะ": "ไม่มีงบให้คะแนน (ทอง/ตราสารหนี้/อื่น ๆ)", "จุดเด่น / จุดอ่อน": "ดูราคาและแนวโน้มเท่านั้น"}
-                if t in q.index:
-                    row.update(q.loc[t].to_dict())
-                extra.append(row)
-        if only_buy:
-            df = df[df["สถานะ"] == "น่าซื้อ"]
-        df = df.sort_values("คะแนนรวม", ascending=False)
+                if in_sector(t):
+                    row = base_row(t)
+                    row.update({"คะแนนรวม": float("nan"), "สถานะ": "ไม่มีงบให้คะแนน (ทอง/ตราสารหนี้/อื่น ๆ)",
+                                "จุดเด่น / จุดอ่อน": "ดูราคาและแนวโน้มเท่านั้น"})
+                    extra.append(row)
         if extra:
             df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
         df = df.reset_index(drop=True)
         df.index += 1
+        if df.empty:
+            st.info("ไม่มีหุ้นที่ตรงเงื่อนไขตอนนี้ ลองผ่อนตัวกรองด้านบนหรือลดคะแนนขั้นต่ำ")
+            return
         move = ["Today %"] if period == "รายวัน" else ["1M %"]
-        move += [c for c in ["From 52w high %"] if c in df]
-        trend = ["1Y trend"] if "1Y trend" in df else []
+        move += ["From 52w high %"]
+        trend = ["1Y trend"]
         score_cols = ["คะแนนรวม"] + S.CRITERIA
-        cols = ["Ticker", "คะแนนรวม", "สถานะ", "จุดเด่น / จุดอ่อน", "ชื่อ", "Price"] + [c for c in move if c in df] + trend + S.CRITERIA
+        cols = ["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา", "จุดเด่น / จุดอ่อน", "กลุ่ม", "ชื่อ", "Price"] + move + ["ประกาศงบ"] + trend
+        if not compact:
+            cols += S.CRITERIA + ["vs MA200 %", "RSI"]
+        cols = [c for c in cols if c in df]
         cfg = {"Ticker": st.column_config.TextColumn("Ticker", pinned=True),
                "คะแนนรวม": st.column_config.NumberColumn("คะแนนรวม", pinned=True),
                "Price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
                "From 52w high %": st.column_config.NumberColumn("ห่างจาก High 52 สัปดาห์", format="%.1f%%"),
+               "vs MA200 %": st.column_config.NumberColumn("เทียบ MA200", format="%.1f%%"),
+               "RSI": st.column_config.NumberColumn("RSI(14)", format="%.0f"),
                "1Y trend": st.column_config.LineChartColumn("แนวโน้ม 1 ปี"),
                "จุดเด่น / จุดอ่อน": st.column_config.TextColumn("จุดเด่น / จุดอ่อน", width="large")}
         for c in move:
             cfg.setdefault(c, st.column_config.NumberColumn(c, format="%.2f%%"))
 
-        def shade(v):  # สีโปร่งแสง ใช้ได้ทั้งโหมดสว่าง/มืด
+        def shade(v):
             if v is None or pd.isna(v):
                 return "background-color: rgba(128,128,128,.15)"
             if v >= 75:
@@ -234,15 +322,15 @@ with tab1:
             return "color: #2ea043" if v > 0 else ("color: #f85149" if v < 0 else "")
 
         view = df[cols]
-        fmt = {c: "{:.0f}" for c in score_cols}
-        styled = (view.style.map(shade, subset=score_cols)
-                  .map(move_color, subset=[c for c in move if c != "From 52w high %"])
-                  .format(fmt, na_rep="-"))
+        sc = [c for c in score_cols if c in view]
+        styled = (view.style.map(shade, subset=sc)
+                  .map(move_color, subset=[c for c in move if c in view and c != "From 52w high %"])
+                  .format({c: "{:.0f}" for c in sc}, na_rep="-"))
         st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored) + len(others)} ตัว · "
                    "สีเขียว >= 75 · เหลือง 55-74 · แดง < 55")
         c_a, c_b = st.columns([5, 1])
-        c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อดูกราฟและรายละเอียดด้านล่างตาราง")
-        c_b.download_button("ดาวน์โหลด CSV", view.drop(columns=trend).to_csv(index=False).encode("utf-8-sig"),
+        c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อดูกราฟ ข่าว และเรดาร์ของตัวนั้นด้านล่างตาราง")
+        c_b.download_button("ดาวน์โหลด CSV", view.drop(columns=[c for c in trend if c in view]).to_csv(index=False).encode("utf-8-sig"),
                             file_name="screener.csv", mime="text/csv", width="stretch")
         ev = st.dataframe(styled, column_config=cfg, width="stretch", height=560,
                           on_select="rerun", selection_mode="single-row", key="tbl")
@@ -251,36 +339,55 @@ with tab1:
             st.session_state["_last_rows"] = rows_sel
             if rows_sel:
                 st.session_state["sel"] = view.iloc[rows_sel[0]]["Ticker"]
-                st.rerun()  # รีเฟรชทั้งหน้าเพื่อแสดงกราฟของตัวที่เลือก (ตารางเองรีเฟรชราคาโดยกราฟไม่ถูกโหลดใหม่)
+                st.rerun()
 
     table()
     if failed:
         st.warning(f"ดึงข้อมูลไม่ได้/ข้อมูลไม่พอ: {', '.join(failed)}")
 
-# ------------------------------------------------------------------ รายละเอียดตัวที่เลือก (อยู่ใต้ตารางใน tab Screener)
-with tab1:
+    # ---- รายละเอียดตัวที่เลือก: กราฟ + เรดาร์ + ข่าว
+    def radar(scores: dict):
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            st.bar_chart(pd.Series({k: (v or 0) for k, v in scores.items()}), horizontal=True, height=300)
+            return
+        labels = list(scores)
+        vals = [scores[k] or 0 for k in labels]
+        fig = go.Figure(go.Scatterpolar(r=vals + vals[:1], theta=labels + labels[:1], fill="toself",
+                                        line=dict(color="#2ea043"), fillcolor="rgba(46,160,67,.30)"))
+        fig.update_layout(polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(range=[0, 100], gridcolor="rgba(255,255,255,.15)", tickfont=dict(size=9)),
+                                     angularaxis=dict(gridcolor="rgba(255,255,255,.15)")),
+                          paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E6EDF3"), margin=dict(l=80, r=90, t=20, b=20),
+                          height=330, showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+
     sel = st.session_state.get("sel")
     if sel in scored or sel in others:
         st.subheader(f"{sel} · {fund[sel]['name']}")
         cc1, cc2 = st.columns([3, 2])
         with cc1:
             tv_widget("advanced-chart", {
-                "autosize": True, "symbol": tv_symbol(sel), "interval": "D", "timezone": "Asia/Bangkok",
+                "autosize": True, "symbol": tv_full(sel), "interval": "D", "timezone": "Asia/Bangkok",
                 "theme": "dark", "style": "1", "locale": "th_TH", "backgroundColor": "rgba(0,0,0,0)",
                 "allow_symbol_change": True, "hide_side_toolbar": False, "support_host": "https://www.tradingview.com"}, 560)
         with cc2:
+            st.caption(f"กลุ่ม: {sector_of(sel)} · ประกาศงบครั้งถัดไป: {earnings_of(sel)} · จังหวะราคา: {timing_of(sel, q_all)}")
             if sel in scored:
                 r = scored[sel]
                 tot = tots[sel]
                 st.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", ratings[sel])
-                st.bar_chart(pd.Series({k: (v or 0) for k, v in r["scores"].items()}), horizontal=True, height=300)
+                radar(r["scores"])
                 m = {k: (f"{v:.2f}" if isinstance(v, float) else v) for k, v in r["metrics"].items() if v is not None}
                 st.dataframe(pd.DataFrame({"ค่า": m}), width="stretch")
                 missing = [k for k, v in r["scores"].items() if v is None]
                 if missing:
                     st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
             else:
-                st.info("ETF ประเภทนี้ (ทอง/ตราสารหนี้/อื่น ๆ) ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟราคา")
+                st.info("ETF ประเภทนี้ (ทอง/ตราสารหนี้/อื่น ๆ) ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟและข่าว")
+        st.markdown(f"**ข่าวของ {sel}**")
+        tv_widget("timeline", {"feedMode": "symbol", "symbol": tv_full(sel), "isTransparent": True, "displayMode": "regular",
+                               "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 460)
 
 with tab_heat:
     src = st.radio("ตลาด", ["S&P 500", "Nasdaq 100"], horizontal=True)
@@ -289,25 +396,43 @@ with tab_heat:
         "blockColor": "change", "locale": "th_TH", "colorTheme": "dark", "hasTopBar": True, "isDataSetEnabled": False,
         "isZoomEnabled": True, "hasSymbolTooltip": True, "isMonoSize": False, "width": "100%", "height": "100%"}, 680)
 
-# ------------------------------------------------------------------ Tab 3
+with tab_news:
+    n1, n2 = st.columns([3, 2])
+    with n1:
+        st.subheader("ข่าวตลาดหุ้นล่าสุด")
+        tv_widget("timeline", {"feedMode": "market", "market": "stock", "isTransparent": True, "displayMode": "regular",
+                               "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 640)
+    with n2:
+        st.subheader("ปฏิทินเศรษฐกิจสหรัฐ")
+        tv_widget("events", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%", "locale": "th_TH",
+                             "importanceFilter": "-1,0,1", "countryFilter": "us"}, 640)
+    st.caption("ข่าวเป็นข้อมูลประกอบการตัดสินใจ ไม่ได้ถูกนำไปคิดคะแนน · ข่าวส่วนใหญ่เป็นภาษาอังกฤษ")
+
+# ------------------------------------------------------------------ วิธีคิดคะแนน
 with tab3:
     st.markdown("""
 **แต่ละเกณฑ์ให้คะแนน 0-100 แล้วถ่วงน้ำหนักตามแถบด้านซ้าย** (ใช้งบรายปีย้อนหลัง ~4 ปีจาก Yahoo Finance)
 
+น้ำหนักตั้งต้น: Revenue 12 · EPS 12 · ROIC 15 · Margin 10 · FCF 15 · Balance Sheet 8 · Moat 10 · Valuation 18
+
 | เกณฑ์ | ตัววัด | ได้คะแนนเต็มเมื่อ |
 |---|---|---|
 | Revenue Growth | CAGR รายได้ | >= 22% (15% ได้ ~70) |
-| EPS Growth | CAGR EPS | >= 28% (18% ได้ ~70) ขาดทุน = 0 |
+| EPS Growth | CAGR EPS หักถ้าจำนวนหุ้นเพิ่ม (เจือจาง) > 1%/ปี บวกเล็กน้อยถ้าซื้อหุ้นคืน | >= 28% (18% ได้ ~70) ขาดทุน = 0 |
 | ROIC | NOPAT / (หนี้+ทุน-เงินสด) เฉลี่ย หักคะแนนถ้าผันผวน | เฉลี่ย >= 30% และนิ่ง (20% ได้ ~70) |
 | Margin | Operating margin ล่าสุด 60% + แนวโน้มขยาย 40% | >= 40% และขยายตัว |
-| FCF | CAGR FCF 60% + สัดส่วนปีที่ FCF โต 40% | CAGR >= 20% โตทุกปี, FCF ติดลบ = ต่ำ |
+| FCF | CAGR FCF 60% + สัดส่วนปีที่ FCF โต 40% แล้วหักถ้า SBC สูงเกิน 15% ของ FCF หรือ FCF แปลงเป็นกำไรสุทธิได้ต่ำกว่า 70% | CAGR >= 20% โตทุกปี และคุณภาพ FCF ดี |
 | Balance Sheet | หนี้สุทธิ / FCF (กี่ปีล้างหนี้) + interest coverage | เงินสดสุทธิ |
-| Moat | แท็กที่คุณระบุใน moat.json 50% + proxy (Gross margin สูงและนิ่ง, ROIC) 50% | มีหลายแท็ก + margin/ROIC สูง |
-| Valuation | PEG (Forward P/E / EPS growth) 60% + FCF yield 40% | PEG <= 0.8 และ FCF yield >= 7% |
+| Moat | แท็กที่คุณระบุใน moat.json 50% + proxy (Gross margin สูงและนิ่ง, ROIC) 50% (แท็กตั้งต้นเป็นการเดาเบื้องต้น ควรแก้ตามมุมมองของคุณ) | มีหลายแท็ก + margin/ROIC สูง |
+| Valuation | PEG (Forward P/E / ค่าเฉลี่ยการโตของ EPS และรายได้) 40% + FCF yield 60% | PEG <= 0.8 และ FCF yield >= 7% |
 
-**สถานะ:** 'น่าซื้อ' = คะแนนรวม >= 75 และ Valuation >= 60 · 'คุณภาพดี แต่ราคาตึง' = คะแนนรวม >= 75 แต่ Valuation ต่ำ · 'น่าติดตาม' = 60-74
+**กลุ่มการเงิน (ธนาคาร/ประกัน):** ROIC, Margin, FCF และ Balance Sheet วัดไม่ได้ตามเกณฑ์นี้ จึงถูกตัดออกและปรับน้ำหนักใหม่
+
+**สถานะ (วัดคุณภาพธุรกิจ):** 'ผ่านเกณฑ์เด่น' = คะแนนรวม >= 75 และ Valuation >= 60 · 'คุณภาพดี แต่ราคาตึง' = คะแนนรวม >= 75 แต่ Valuation ต่ำ · 'น่าติดตาม' = 60-74
+
+**จังหวะราคา (แยกจากคะแนนคุณภาพ):** 'ย่อตัวเข้าโซน' = ราคาต่ำกว่าจุดสูงสุด 52 สัปดาห์ 8-25% และยังเหนือ MA200 · 'ใกล้จุดสูงสุด' = ห่างไม่ถึง 8% · 'ต่ำกว่า MA200 (ระวัง)' = แนวโน้มขาลง · 'ย่อลึก ตรวจสอบสาเหตุ' = ลงเกิน 25% ควรอ่านข่าวก่อน
 
 **ETF:** ให้คะแนนแบบ look-through คือถัวเฉลี่ยตามน้ำหนักของหุ้น top holdings (ตามที่ Yahoo ให้ ปกติ ~10 ตัว)
 
-**ข้อจำกัดที่ควรรู้:** Moat วัดจากตัวเลขตรง ๆ ไม่ได้ จึงพึ่งวิจารณญาณของคุณ · งบรายปีของ Yahoo มีแค่ ~4 ปี CAGR จึงเป็น 3 ช่วง · เกณฑ์ 'ระยะยาว' ในความคิดคุณอาจอยากดู 5-10 ปี ซึ่งต้องเปลี่ยนแหล่งข้อมูล
+**ข้อจำกัดที่ควรรู้:** Moat วัดจากตัวเลขตรง ๆ ไม่ได้ จึงพึ่งวิจารณญาณของคุณ · งบรายปีของ Yahoo มีแค่ ~4 ปี CAGR จึงเป็น 3 ช่วง · แอพนี้เป็นตัวคัดกรองเบื้องต้น ไม่ใช่คำแนะนำการลงทุน
 """)
