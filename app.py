@@ -359,7 +359,7 @@ def detail_dialog(sel: str):
         if missing:
             st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
     st.markdown(f"**ข่าวของ {sel}**")
-    tv_widget("timeline", {"feedMode": "symbol", "symbol": tv_full(sel), "isTransparent": True, "displayMode": "regular",
+    tv_widget("timeline", {"feedMode": "symbol", "symbol": tv_full(sel), "isTransparent": True, "displayMode": "compact",
                            "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 420)
     st.caption("คะแนนเป็นข้อมูลคัดกรองเบื้องต้น ไม่ใช่คำแนะนำให้ซื้อหรือขาย")
 
@@ -562,16 +562,37 @@ with tab_heat:
         st.caption("แผนที่ทั้งตลาดมีหุ้นเป็นร้อยตัว กรอบจึงเล็ก ใช้เมาส์ล้อเลื่อนซูมเข้าไปดูกลุ่มที่สนใจได้")
 
 with tab_news:
-    n1, n2 = st.columns([3, 2])
-    with n1:
+    a1, a2 = st.columns(2)
+    with a1:
+        st.subheader("ภาพรวมตลาดโลก")
+        tv_widget("market-overview", {
+            "colorTheme": "dark", "dateRange": "1M", "showChart": True, "locale": "th_TH", "isTransparent": True,
+            "showSymbolLogo": True, "showFloatingTooltip": False, "width": "100%", "height": "100%",
+            "tabs": [
+                {"title": "ดัชนีหุ้น", "symbols": [
+                    {"s": "FOREXCOM:SPXUSD", "d": "S&P 500"}, {"s": "FOREXCOM:NSXUSD", "d": "Nasdaq 100"},
+                    {"s": "FOREXCOM:DJI", "d": "Dow Jones"}, {"s": "INDEX:NKY", "d": "Nikkei 225"},
+                    {"s": "INDEX:DEU40", "d": "DAX เยอรมนี"}, {"s": "FOREXCOM:UKXGBP", "d": "FTSE 100"}]},
+                {"title": "สินทรัพย์อื่น", "symbols": [
+                    {"s": "TVC:GOLD", "d": "ทองคำ"}, {"s": "TVC:USOIL", "d": "น้ำมันดิบ"},
+                    {"s": "BITSTAMP:BTCUSD", "d": "Bitcoin"}, {"s": "TVC:US10Y", "d": "พันธบัตรสหรัฐ 10 ปี"},
+                    {"s": "TVC:DXY", "d": "ดัชนีดอลลาร์"}]}]}, 460)
+    with a2:
+        st.subheader("หุ้นเด่นวันนี้ (ขึ้นแรง / ลงแรง / ซื้อขายมาก)")
+        tv_widget("hotlists", {"colorTheme": "dark", "dateRange": "1M", "exchange": "US", "showChart": True, "locale": "th_TH",
+                               "isTransparent": True, "showSymbolLogo": True, "showFloatingTooltip": False,
+                               "width": "100%", "height": "100%"}, 460)
+    b1, b2 = st.columns([3, 2])
+    with b1:
         st.subheader("ข่าวตลาดหุ้นล่าสุด")
-        tv_widget("timeline", {"feedMode": "market", "market": "stock", "isTransparent": True, "displayMode": "regular",
-                               "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 640)
-    with n2:
+        tv_widget("timeline", {"feedMode": "market", "market": "stock", "isTransparent": True, "displayMode": "compact",
+                               "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 620)
+    with b2:
         st.subheader("ปฏิทินเศรษฐกิจสหรัฐ")
         tv_widget("events", {"colorTheme": "dark", "isTransparent": True, "width": "100%", "height": "100%", "locale": "th_TH",
-                             "importanceFilter": "-1,0,1", "countryFilter": "us"}, 640)
-    st.caption("ข่าวเป็นข้อมูลประกอบการตัดสินใจ ไม่ได้ถูกนำไปคิดคะแนน · ข่าวส่วนใหญ่เป็นภาษาอังกฤษ")
+                             "importanceFilter": "-1,0,1", "countryFilter": "us"}, 620)
+    st.caption("ข่าวและตัวเลขเป็นข้อมูลประกอบการตัดสินใจ ไม่ได้ถูกนำไปคิดคะแนน · ข่าวส่วนใหญ่เป็นภาษาอังกฤษ · "
+               "ปฏิทินจะมีรายการน้อยในวันหยุดตลาด")
 
 # ------------------------------------------------------------------ คู่มือ
 with tab3:
