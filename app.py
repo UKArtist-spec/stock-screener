@@ -13,24 +13,6 @@ st.set_page_config(page_title="Quality Growth Screener", layout="wide")
 DEMO_ENV = os.environ.get("DEMO") == "1"
 
 
-@st.cache_resource
-def _bg_css() -> str:
-    import base64
-
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bg.jpg")
-    if not os.path.exists(path):
-        return ""
-    b64 = base64.b64encode(open(path, "rb").read()).decode()
-    return f"""<style>
-.stApp {{background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,.55)), url(data:image/jpeg;base64,{b64}) center/cover fixed no-repeat;}}
-[data-testid="stHeader"] {{background: transparent;}}
-[data-testid="stSidebar"] {{background: rgba(0,0,0,.55); backdrop-filter: blur(6px);}}
-.block-container {{background: rgba(0,0,0,.50); border-radius: 14px; padding: 2rem 2.2rem; margin-top: 1rem;}}
-</style>"""
-
-
-st.markdown(_bg_css(), unsafe_allow_html=True)
-
 # ------------------------------------------------------------------ Sidebar
 with st.sidebar:
     st.header("ตั้งค่า")
