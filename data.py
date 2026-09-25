@@ -27,63 +27,90 @@ def load_moat_tags() -> dict:
         return {}
 
 
-def load_sp500() -> list[str]:
-    """รายชื่อ S&P 500 (Wikipedia บล็อกคำขอที่ไม่มี User-Agent จึงระบุเอง และมี CSV สำรอง)"""
-    import io
-
+def _get_html(url: str) -> str:
     import requests
 
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; StockScreener/1.0)"}
-    sources = [
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; StockScreener/1.0)"}, timeout=25)
+    r.raise_for_status()
+    return r.text
+
+
+def _sp500_df() -> pd.DataFrame:
+    """ตาราง S&P 500 (Symbol, GICS Sector, GICS Sub-Industry) จาก Wikipedia และมี CSV สำรอง"""
+    import io
+
+    last = None
+    for url, kind in [
         ("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "wiki"),
         ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv", "csv"),
-    ]
-    last = None
-    for url, kind in sources:
+    ]:
         try:
-            r = requests.get(url, headers=headers, timeout=20)
-            r.raise_for_status()
-            tbl = pd.read_html(io.StringIO(r.text))[0] if kind == "wiki" else pd.read_csv(io.StringIO(r.text))
-            syms = [str(x).strip().replace(".", "-") for x in tbl["Symbol"].tolist()]
-            if len(syms) > 400:
-                return syms
+            txt = _get_html(url)
+            df = pd.read_html(io.StringIO(txt))[0] if kind == "wiki" else pd.read_csv(io.StringIO(txt))
+            if len(df) > 400 and "Symbol" in df:
+                df["Symbol"] = df["Symbol"].astype(str).str.strip().str.replace(".", "-", regex=False)
+                return df
         except Exception as e:  # noqa: BLE001
             last = e
     raise RuntimeError(f"โหลดรายชื่อไม่สำเร็จ: {last}")
 
 
-# ชุด ETF ตามแผนการลงทุน (จากภาพ ETF HACK)
-ETF_SETS = {
-    "1 Balanced (พอร์ตสมดุล)": ["VOO", "VTI", "VT"],
-    "2 Tech (เทคโนโลยี)": ["QQQM", "SCHG", "XLK"],
-    "3 Sector (รายอุตสาหกรรม)": ["SMH", "XLV", "XLE"],
-    "4 Dividend (ปันผล)": ["SCHD", "VYM", "VIG"],
-    "5 Global (ทั่วโลก)": ["VEA", "IEMG", "VXUS"],
-    "6 Commodity (สินค้าโภคภัณฑ์)": ["GLDM", "SIVR", "USO"],
-    "7 Small Cap (หุ้นเล็ก)": ["IWM", "IJR", "AVUV"],
-    "8 Real Estate (อสังหาฯ)": ["XLRE", "ITB", "SCHH"],
-    "9 Bond (ตราสารหนี้)": ["SGOV", "BND", "TLT"],
-    "ETF เด่น 5 ตัว": ["VOO", "QQQM", "GLDM", "SMH", "SGOV"],
+def load_sp500() -> list[str]:
+    return _sp500_df()["Symbol"].tolist()
+
+
+def _nasdaq100() -> list[str]:
+    import io
+
+    tables = pd.read_html(io.StringIO(_get_html("https://en.wikipedia.org/wiki/Nasdaq-100")))
+    for t in tables:
+        for col in ("Ticker", "Symbol"):
+            if col in t.columns and 90 <= len(t) <= 110:
+                return [str(x).strip().replace(".", "-") for x in t[col].tolist()]
+    raise RuntimeError("ไม่พบตารางรายชื่อ Nasdaq-100")
+
+
+def _etf_holdings(etf: str) -> list[str]:
+    """หุ้น top holdings ของ ETF (Yahoo ให้ ~10 ตัว) เก็บเฉพาะ ticker สหรัฐ/ADR"""
+    import re
+
+    try:
+        import yfinance as yf
+
+        idx = yf.Ticker(etf).funds_data.top_holdings.index
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(x).strip().upper() for x in idx if re.fullmatch(r"[A-Za-z]{1,5}(-[A-Za-z])?", str(x).strip())]
+
+
+# ปุ่มกลุ่มหุ้น: ชื่อปุ่ม -> (ETF อ้างอิง, วิธีหารายชื่อ)
+GROUPS = {
+    "Nasdaq 100": ("QQQM", "nasdaq100"),
+    "Semiconductor": ("SMH", ("sub", "Semiconductor")),
+    "Health Care": ("XLV", ("sector", "Health Care")),
+    "Energy": ("XLE", ("sector", "Energy")),
+    "Large Cap Growth": ("SCHG", "holdings"),
+    "Total World": ("VT", "holdings"),
+    "Total Intl ex-U.S.": ("VXUS", "holdings"),
 }
 
 
-def load_etf_set(name: str, include_holdings: bool = True) -> list[str]:
-    """ETF ในชุดนั้น + (ถ้าเลือก) หุ้น top holdings ข้างใน (Yahoo ให้ประมาณ 10 ตัว/กองทุน)"""
-    import re
-
-    import yfinance as yf
-
-    etfs = list(ETF_SETS[name])
-    out = list(etfs)
-    if include_holdings:
-        for e in etfs:
-            try:
-                for sym in yf.Ticker(e).funds_data.top_holdings.index:
-                    sym = str(sym).strip().upper()
-                    if re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", sym):
-                        out.append(sym)
-            except Exception:  # noqa: BLE001  (กองทุนทอง/พันธบัตรไม่มีหุ้นข้างใน)
-                pass
+def load_group(name: str) -> list[str]:
+    etf, how = GROUPS[name]
+    out = [etf]
+    if how == "nasdaq100":
+        try:
+            out += _nasdaq100()
+        except Exception:  # noqa: BLE001  ถ้าโหลดรายชื่อเต็มไม่ได้ ใช้หุ้นหลักใน QQQM แทน
+            out += _etf_holdings(etf)
+    elif how == "holdings":
+        out += _etf_holdings(etf)
+    else:
+        kind, key = how
+        df = _sp500_df()
+        col = "GICS Sector" if kind == "sector" else "GICS Sub-Industry"
+        out += df[df[col].astype(str).str.contains(key, case=False)]["Symbol"].tolist()
+        out += _etf_holdings(etf)  # เพิ่มหุ้นนอก S&P 500 ที่กองทุนถือ เช่น TSM, ASML
     return list(dict.fromkeys(out))
 
 

@@ -13,23 +13,15 @@ st.set_page_config(page_title="Quality Growth Screener", layout="wide")
 DEMO_ENV = os.environ.get("DEMO") == "1"
 
 
-@st.cache_resource
-def _bg_css() -> str:
-    import base64
-
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bg.jpg")
-    if not os.path.exists(path):
-        return ""
-    b64 = base64.b64encode(open(path, "rb").read()).decode()
-    return f"""<style>
-.stApp {{background: linear-gradient(rgba(255,255,255,.10), rgba(255,255,255,.10)), url(data:image/jpeg;base64,{b64}) center/cover fixed no-repeat;}}
-[data-testid="stHeader"] {{background: transparent;}}
-[data-testid="stSidebar"] {{background: rgba(255,255,255,.65); backdrop-filter: blur(4px);}}
-.block-container {{background: rgba(255,255,255,.70); border-radius: 14px; padding: 2rem 2.2rem; margin-top: 1rem;}}
-</style>"""
-
-
-st.markdown(_bg_css(), unsafe_allow_html=True)
+st.markdown("""<style>
+.stApp {background: linear-gradient(135deg, #000000 0%, #08112a 40%, #14224a 72%, #2a1660 100%); background-attachment: fixed;}
+[data-testid="stHeader"] {background: transparent;}
+[data-testid="stSidebar"] {background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.015));
+    border-right: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(6px);}
+.block-container {background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.015));
+    border: 1px solid rgba(255,255,255,.09); border-radius: 16px; padding: 2rem 2.2rem; margin-top: 1rem;
+    box-shadow: 0 10px 40px rgba(0,0,0,.55);}
+</style>""", unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------ Sidebar
@@ -44,12 +36,16 @@ with st.sidebar:
             st.error(str(e))
     if c2.button("ค่าเริ่มต้น", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
         st.session_state.pop("universe", None)
-    st.markdown("**ชุด ETF ตามแผนการลงทุน**")
-    etf_pick = st.selectbox("เลือกชุด", list(D.ETF_SETS), label_visibility="collapsed")
-    with_hold = st.checkbox("รวมหุ้นข้างใน ETF (top holdings)", value=True)
-    if st.button("โหลดชุด ETF นี้", help="ดึงตัว ETF และหุ้นหลักในกองทุนมาให้คะแนนพร้อมกัน"):
-        with st.spinner("กำลังดึงรายชื่อหุ้นในกองทุน..."):
-            st.session_state["universe"] = " ".join(D.load_etf_set(etf_pick, with_hold))
+    st.markdown("**โหลดหุ้นตามกลุ่ม**")
+    for name in D.GROUPS:
+        if st.button(name, key=f"grp_{name}", width="stretch", help=f"ETF อ้างอิง: {D.GROUPS[name][0]}"):
+            with st.spinner(f"กำลังโหลดกลุ่ม {name}..."):
+                try:
+                    lst = D.load_group(name)
+                    st.session_state["universe"] = " ".join(lst)
+                    st.toast(f"โหลดกลุ่ม {name} แล้ว {len(lst)} ตัว")
+                except Exception as e:  # noqa: BLE001
+                    st.error(str(e))
     universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
