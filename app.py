@@ -16,12 +16,15 @@ DEMO_ENV = os.environ.get("DEMO") == "1"
 with st.sidebar:
     st.header("ตั้งค่า")
     demo = st.toggle("โหมดข้อมูลจำลอง (demo)", value=DEMO_ENV, help="ใช้ทดสอบหน้าตาแอพ ไม่ใช่ข้อมูลจริง")
-    if st.button("โหลดรายชื่อ S&P 500 ทั้งหมด"):
+    c1, c2 = st.columns(2)
+    if c1.button("ใช้ S&P 500", help="โหลดหุ้น ~500 ตัว ครั้งแรกใช้เวลาหลายนาที และอาจถูก Yahoo จำกัดความเร็ว"):
         try:
             st.session_state["universe"] = " ".join(D.load_sp500())
         except Exception as e:  # noqa: BLE001
-            st.error(f"โหลดไม่สำเร็จ: {e}")
-    universe_txt = st.text_area("รายชื่อ ticker (คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
+            st.error(str(e))
+    if c2.button("ค่าเริ่มต้น", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
+        st.session_state.pop("universe", None)
+    universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
         weights = {k: st.slider(k, 0, 30, S.DEFAULT_WEIGHTS[k]) for k in S.CRITERIA}

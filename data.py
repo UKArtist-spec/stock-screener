@@ -28,8 +28,28 @@ def load_moat_tags() -> dict:
 
 
 def load_sp500() -> list[str]:
-    tbl = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-    return [s.replace(".", "-") for s in tbl["Symbol"].tolist()]
+    """รายชื่อ S&P 500 (Wikipedia บล็อกคำขอที่ไม่มี User-Agent จึงระบุเอง และมี CSV สำรอง)"""
+    import io
+
+    import requests
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; StockScreener/1.0)"}
+    sources = [
+        ("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "wiki"),
+        ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv", "csv"),
+    ]
+    last = None
+    for url, kind in sources:
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            r.raise_for_status()
+            tbl = pd.read_html(io.StringIO(r.text))[0] if kind == "wiki" else pd.read_csv(io.StringIO(r.text))
+            syms = [str(x).strip().replace(".", "-") for x in tbl["Symbol"].tolist()]
+            if len(syms) > 400:
+                return syms
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(f"โหลดรายชื่อไม่สำเร็จ: {last}")
 
 
 # ------------------------------------------------------------------ helpers
