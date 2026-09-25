@@ -52,6 +52,41 @@ def load_sp500() -> list[str]:
     raise RuntimeError(f"โหลดรายชื่อไม่สำเร็จ: {last}")
 
 
+# ชุด ETF ตามแผนการลงทุน (จากภาพ ETF HACK)
+ETF_SETS = {
+    "1 Balanced (พอร์ตสมดุล)": ["VOO", "VTI", "VT"],
+    "2 Tech (เทคโนโลยี)": ["QQQM", "SCHG", "XLK"],
+    "3 Sector (รายอุตสาหกรรม)": ["SMH", "XLV", "XLE"],
+    "4 Dividend (ปันผล)": ["SCHD", "VYM", "VIG"],
+    "5 Global (ทั่วโลก)": ["VEA", "IEMG", "VXUS"],
+    "6 Commodity (สินค้าโภคภัณฑ์)": ["GLDM", "SIVR", "USO"],
+    "7 Small Cap (หุ้นเล็ก)": ["IWM", "IJR", "AVUV"],
+    "8 Real Estate (อสังหาฯ)": ["XLRE", "ITB", "SCHH"],
+    "9 Bond (ตราสารหนี้)": ["SGOV", "BND", "TLT"],
+    "ETF เด่น 5 ตัว": ["VOO", "QQQM", "GLDM", "SMH", "SGOV"],
+}
+
+
+def load_etf_set(name: str, include_holdings: bool = True) -> list[str]:
+    """ETF ในชุดนั้น + (ถ้าเลือก) หุ้น top holdings ข้างใน (Yahoo ให้ประมาณ 10 ตัว/กองทุน)"""
+    import re
+
+    import yfinance as yf
+
+    etfs = list(ETF_SETS[name])
+    out = list(etfs)
+    if include_holdings:
+        for e in etfs:
+            try:
+                for sym in yf.Ticker(e).funds_data.top_holdings.index:
+                    sym = str(sym).strip().upper()
+                    if re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", sym):
+                        out.append(sym)
+            except Exception:  # noqa: BLE001  (กองทุนทอง/พันธบัตรไม่มีหุ้นข้างใน)
+                pass
+    return list(dict.fromkeys(out))
+
+
 # ------------------------------------------------------------------ helpers
 def _row(df: pd.DataFrame | None, *names):
     if df is None or df.empty:

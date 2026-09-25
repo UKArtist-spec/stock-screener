@@ -12,6 +12,25 @@ import scoring as S
 st.set_page_config(page_title="Quality Growth Screener", layout="wide")
 DEMO_ENV = os.environ.get("DEMO") == "1"
 
+
+@st.cache_resource
+def _bg_css() -> str:
+    import base64
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bg.jpg")
+    if not os.path.exists(path):
+        return ""
+    b64 = base64.b64encode(open(path, "rb").read()).decode()
+    return f"""<style>
+.stApp {{background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,.55)), url(data:image/jpeg;base64,{b64}) center/cover fixed no-repeat;}}
+[data-testid="stHeader"] {{background: transparent;}}
+[data-testid="stSidebar"] {{background: rgba(0,0,0,.55); backdrop-filter: blur(6px);}}
+.block-container {{background: rgba(0,0,0,.50); border-radius: 14px; padding: 2rem 2.2rem; margin-top: 1rem;}}
+</style>"""
+
+
+st.markdown(_bg_css(), unsafe_allow_html=True)
+
 # ------------------------------------------------------------------ Sidebar
 with st.sidebar:
     st.header("ตั้งค่า")
@@ -24,6 +43,12 @@ with st.sidebar:
             st.error(str(e))
     if c2.button("ค่าเริ่มต้น", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
         st.session_state.pop("universe", None)
+    st.markdown("**ชุด ETF ตามแผนการลงทุน**")
+    etf_pick = st.selectbox("เลือกชุด", list(D.ETF_SETS), label_visibility="collapsed")
+    with_hold = st.checkbox("รวมหุ้นข้างใน ETF (top holdings)", value=True)
+    if st.button("โหลดชุด ETF นี้", help="ดึงตัว ETF และหุ้นหลักในกองทุนมาให้คะแนนพร้อมกัน"):
+        with st.spinner("กำลังดึงรายชื่อหุ้นในกองทุน..."):
+            st.session_state["universe"] = " ".join(D.load_etf_set(etf_pick, with_hold))
     universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
@@ -79,7 +104,8 @@ def score_entry(t: str, fund: dict) -> dict | None:
 fund = get_fundamentals(tuple(tickers), demo)
 scored = {t: score_entry(t, fund) for t in tickers}
 scored = {t: v for t, v in scored.items() if v}
-failed = [t for t in tickers if t not in scored]
+others = [t for t in tickers if t not in scored and fund.get(t, {}).get("type") == "ETF"]  # ETF ทอง/พันธบัตร ไม่มีงบให้ประเมิน
+failed = [t for t in tickers if t not in scored and t not in others]
 
 tab1, tab2, tab3 = st.tabs(["Screener", "รายละเอียดรายตัว", "วิธีคิดคะแนน"])
 
@@ -91,7 +117,7 @@ with tab1:
 
     @st.fragment(run_every=refresh)
     def table():
-        q = get_quotes(tuple(scored), demo)
+        q = get_quotes(tuple(list(scored) + others), demo)
         rows = []
         for t, r in scored.items():
             tot = S.total_score(r["scores"], weights)
@@ -104,9 +130,20 @@ with tab1:
             rows.append(row)
         df = pd.DataFrame(rows)
         df = df[df["คะแนนรวม"].notna() & (df["คะแนนรวม"] >= min_score)]
+        extra = []
+        if min_score == 0 and not only_buy:
+            for t in others:
+                row = {"Ticker": t, "ชื่อ": fund[t]["name"], "คะแนนรวม": float("nan"),
+                       "สถานะ": "ไม่มีงบให้คะแนน (ทอง/ตราสารหนี้/อื่น ๆ)", "จุดเด่น / จุดอ่อน": "ดูราคาและแนวโน้มเท่านั้น"}
+                if t in q.index:
+                    row.update(q.loc[t].to_dict())
+                extra.append(row)
         if only_buy:
             df = df[df["สถานะ"] == "น่าซื้อ"]
-        df = df.sort_values("คะแนนรวม", ascending=False).reset_index(drop=True)
+        df = df.sort_values("คะแนนรวม", ascending=False)
+        if extra:
+            df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+        df = df.reset_index(drop=True)
         df.index += 1
         move = ["Today %"] if period == "รายวัน" else ["1M %"]
         move += [c for c in ["From 52w high %"] if c in df]
@@ -141,7 +178,7 @@ with tab1:
         styled = (view.style.map(shade, subset=score_cols)
                   .map(move_color, subset=[c for c in move if c != "From 52w high %"])
                   .format(fmt, na_rep="-"))
-        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored)} ตัว · "
+        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored) + len(others)} ตัว · "
                    "สีเขียว >= 75 · เหลือง 55-74 · แดง < 55")
         st.dataframe(styled, column_config=cfg, width="stretch", height=600)
 
