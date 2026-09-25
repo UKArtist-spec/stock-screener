@@ -13,6 +13,16 @@ import data as D
 import scoring as S
 
 st.set_page_config(page_title="Quality Growth Screener", layout="wide")
+
+# กัน Streamlit Cloud ใช้โมดูลเก่าค้างในหน่วยความจำ และเตือนชัดเจนถ้าไฟล์บน GitHub ไม่ครบเวอร์ชัน
+import importlib  # noqa: E402
+
+S = importlib.reload(S)
+D = importlib.reload(D)
+if not hasattr(S, "CRITERIA_TH") or not hasattr(S, "plain_summary") or not hasattr(D, "GROUPS"):
+    st.error("ไฟล์บน GitHub ไม่ครบเวอร์ชันใหม่: ต้องอัปโหลด app.py, scoring.py, data.py และ requirements.txt ทั้ง 4 ไฟล์พร้อมกัน "
+             "แล้วกด Manage app > Reboot app")
+    st.stop()
 DEMO_ENV = os.environ.get("DEMO") == "1"
 
 
