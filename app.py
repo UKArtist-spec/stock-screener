@@ -23,8 +23,8 @@ with st.sidebar:
             st.error(f"โหลดไม่สำเร็จ: {e}")
     universe_txt = st.text_area("รายชื่อ ticker (คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
-    st.subheader("น้ำหนักเกณฑ์")
-    weights = {k: st.slider(k, 0, 30, S.DEFAULT_WEIGHTS[k]) for k in S.CRITERIA}
+    with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
+        weights = {k: st.slider(k, 0, 30, S.DEFAULT_WEIGHTS[k]) for k in S.CRITERIA}
     refresh = st.select_slider("รีเฟรชราคาทุก (วินาที)", [15, 30, 60, 120, 300], value=60)
     min_score = st.slider("คะแนนรวมขั้นต่ำ", 0, 90, 0)
 
@@ -84,7 +84,7 @@ tab1, tab2, tab3 = st.tabs(["Screener", "รายละเอียดราย
 with tab1:
     period = st.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
                       help="รายวัน = เรียงตามคะแนน แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน และระยะห่างจากจุดสูงสุด 52 สัปดาห์")
-    only_buy = st.checkbox("แสดงเฉพาะ 'น่าซื้อ' (คะแนนรวม >= 70 และ Valuation >= 50)")
+    only_buy = st.checkbox("แสดงเฉพาะ 'น่าซื้อ' (คะแนนรวม >= 75 และ Valuation >= 60)")
 
     @st.fragment(run_every=refresh)
     def table():
@@ -92,8 +92,9 @@ with tab1:
         rows = []
         for t, r in scored.items():
             tot = S.total_score(r["scores"], weights)
-            row = {"Ticker": t, "ชื่อ": fund[t]["name"], "ประเภท": fund[t]["type"], "คะแนนรวม": tot,
-                   "สถานะ": S.rating(tot, r["scores"].get("Valuation"))}
+            row = {"Ticker": t, "ชื่อ": fund[t]["name"], "คะแนนรวม": tot,
+                   "สถานะ": S.rating(tot, r["scores"].get("Valuation")),
+                   "จุดเด่น / จุดอ่อน": S.highlights(r["scores"])}
             row.update({k: r["scores"].get(k) for k in S.CRITERIA})
             if t in q.index:
                 row.update(q.loc[t].to_dict())
@@ -104,13 +105,42 @@ with tab1:
             df = df[df["สถานะ"] == "น่าซื้อ"]
         df = df.sort_values("คะแนนรวม", ascending=False).reset_index(drop=True)
         df.index += 1
-        move = ["Today %"] if period == "รายวัน" else ["1M %", "From 52w high %"]
-        cols = ["Ticker", "ชื่อ", "ประเภท", "คะแนนรวม", "สถานะ", "Price"] + [c for c in move if c in df] + S.CRITERIA
-        cfg = {c: st.column_config.ProgressColumn(c, min_value=0, max_value=100, format="%.0f") for c in ["คะแนนรวม"] + S.CRITERIA}
-        cfg.update({c: st.column_config.NumberColumn(c, format="%.2f%%") for c in move})
-        cfg["Price"] = st.column_config.NumberColumn("ราคา", format="$%.2f")
-        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored)} ตัว")
-        st.dataframe(df[cols], column_config=cfg, width="stretch", height=560)
+        move = ["Today %"] if period == "รายวัน" else ["1M %"]
+        move += [c for c in ["From 52w high %"] if c in df]
+        trend = ["1Y trend"] if "1Y trend" in df else []
+        score_cols = ["คะแนนรวม"] + S.CRITERIA
+        cols = ["Ticker", "คะแนนรวม", "สถานะ", "จุดเด่น / จุดอ่อน", "ชื่อ", "Price"] + [c for c in move if c in df] + trend + S.CRITERIA
+        cfg = {"Ticker": st.column_config.TextColumn("Ticker", pinned=True),
+               "คะแนนรวม": st.column_config.NumberColumn("คะแนนรวม", pinned=True),
+               "Price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
+               "From 52w high %": st.column_config.NumberColumn("ห่างจาก High 52 สัปดาห์", format="%.1f%%"),
+               "1Y trend": st.column_config.LineChartColumn("แนวโน้ม 1 ปี"),
+               "จุดเด่น / จุดอ่อน": st.column_config.TextColumn("จุดเด่น / จุดอ่อน", width="large")}
+        for c in move:
+            cfg.setdefault(c, st.column_config.NumberColumn(c, format="%.2f%%"))
+
+        def shade(v):  # สีโปร่งแสง ใช้ได้ทั้งโหมดสว่าง/มืด
+            if v is None or pd.isna(v):
+                return "background-color: rgba(128,128,128,.15)"
+            if v >= 75:
+                return "background-color: rgba(46,160,67,.45)"
+            if v >= 55:
+                return "background-color: rgba(210,153,34,.40)"
+            return "background-color: rgba(248,81,73,.35)"
+
+        def move_color(v):
+            if v is None or pd.isna(v):
+                return ""
+            return "color: #2ea043" if v > 0 else ("color: #f85149" if v < 0 else "")
+
+        view = df[cols]
+        fmt = {c: "{:.0f}" for c in score_cols}
+        styled = (view.style.map(shade, subset=score_cols)
+                  .map(move_color, subset=[c for c in move if c != "From 52w high %"])
+                  .format(fmt, na_rep="-"))
+        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored)} ตัว · "
+                   "สีเขียว >= 75 · เหลือง 55-74 · แดง < 55")
+        st.dataframe(styled, column_config=cfg, width="stretch", height=600)
 
     table()
     if failed:
@@ -141,16 +171,16 @@ with tab3:
 
 | เกณฑ์ | ตัววัด | ได้คะแนนเต็มเมื่อ |
 |---|---|---|
-| Revenue Growth | CAGR รายได้ | >= 15% (10% ได้ ~70) |
-| EPS Growth | CAGR EPS | >= 18% (12% ได้ ~70) ขาดทุน = 0 |
-| ROIC | NOPAT / (หนี้+ทุน-เงินสด) เฉลี่ย หักคะแนนถ้าผันผวน | เฉลี่ย >= 25% และนิ่ง |
-| Margin | Operating margin ล่าสุด 60% + แนวโน้มขยาย 40% | >= 30% และขยายตัว |
-| FCF | CAGR FCF 60% + สัดส่วนปีที่ FCF โต 40% | CAGR >= 15% โตทุกปี, FCF ติดลบ = ต่ำ |
+| Revenue Growth | CAGR รายได้ | >= 22% (15% ได้ ~70) |
+| EPS Growth | CAGR EPS | >= 28% (18% ได้ ~70) ขาดทุน = 0 |
+| ROIC | NOPAT / (หนี้+ทุน-เงินสด) เฉลี่ย หักคะแนนถ้าผันผวน | เฉลี่ย >= 30% และนิ่ง (20% ได้ ~70) |
+| Margin | Operating margin ล่าสุด 60% + แนวโน้มขยาย 40% | >= 40% และขยายตัว |
+| FCF | CAGR FCF 60% + สัดส่วนปีที่ FCF โต 40% | CAGR >= 20% โตทุกปี, FCF ติดลบ = ต่ำ |
 | Balance Sheet | หนี้สุทธิ / FCF (กี่ปีล้างหนี้) + interest coverage | เงินสดสุทธิ |
 | Moat | แท็กที่คุณระบุใน moat.json 50% + proxy (Gross margin สูงและนิ่ง, ROIC) 50% | มีหลายแท็ก + margin/ROIC สูง |
-| Valuation | PEG (Forward P/E / EPS growth) 60% + FCF yield 40% | PEG <= 1 และ FCF yield >= 6% |
+| Valuation | PEG (Forward P/E / EPS growth) 60% + FCF yield 40% | PEG <= 0.8 และ FCF yield >= 7% |
 
-**สถานะ:** 'น่าซื้อ' = คะแนนรวม >= 70 และ Valuation >= 50 · 'คุณภาพดี แต่ราคาตึง' = คะแนนรวม >= 70 แต่ Valuation ต่ำ · 'น่าติดตาม' = 55-70
+**สถานะ:** 'น่าซื้อ' = คะแนนรวม >= 75 และ Valuation >= 60 · 'คุณภาพดี แต่ราคาตึง' = คะแนนรวม >= 75 แต่ Valuation ต่ำ · 'น่าติดตาม' = 60-74
 
 **ETF:** ให้คะแนนแบบ look-through คือถัวเฉลี่ยตามน้ำหนักของหุ้น top holdings (ตามที่ Yahoo ให้ ปกติ ~10 ตัว)
 

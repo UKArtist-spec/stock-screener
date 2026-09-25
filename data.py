@@ -132,12 +132,13 @@ def fetch_many(tickers: list[str], demo: bool = False, workers: int = 8) -> dict
 # ------------------------------------------------------------------ ราคา
 def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
     """ราคาล่าสุด + % เปลี่ยนแปลงวันนี้ / 1 เดือน / ห่างจากจุดสูงสุด 52 สัปดาห์ (Yahoo ฟรีดีเลย์ ~15 นาที)"""
-    cols = ["Price", "Today %", "1M %", "From 52w high %"]
+    cols = ["Price", "Today %", "1M %", "From 52w high %", "1Y trend"]
     if demo:
         rows = {}
         for t in tickers:
             r = np.random.default_rng(zlib.crc32(t.encode()) + int(pd.Timestamp.now().timestamp() // 30))
-            rows[t] = [float(r.uniform(50, 600)), float(r.normal(0, 1.2)), float(r.normal(1, 5)), float(-abs(r.normal(8, 8)))]
+            rows[t] = [float(r.uniform(50, 600)), float(r.normal(0, 1.2)), float(r.normal(1, 5)), float(-abs(r.normal(8, 8))),
+                        list(np.cumsum(r.normal(0.2, 2, 60)) + 100)]
         return pd.DataFrame.from_dict(rows, orient="index", columns=cols)
     import yfinance as yf
 
@@ -150,5 +151,5 @@ def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
         if len(s) < 25:
             continue
         rows[t] = [float(s.iloc[-1]), (s.iloc[-1] / s.iloc[-2] - 1) * 100, (s.iloc[-1] / s.iloc[-22] - 1) * 100,
-                   (s.iloc[-1] / s.max() - 1) * 100]
+                   (s.iloc[-1] / s.max() - 1) * 100, s.iloc[-260:].iloc[::5].round(2).tolist()]
     return pd.DataFrame.from_dict(rows, orient="index", columns=cols)

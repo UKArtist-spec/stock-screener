@@ -64,7 +64,7 @@ def compute_roic(fin: dict) -> pd.Series | None:
 # ---------------------------------------------------------------- 8 เกณฑ์
 def score_revenue(fin):
     g = cagr(fin.get("revenue"))
-    return interp(g, [0, 5, 10, 15], [0, 30, 70, 100]), g
+    return interp(g, [0, 8, 15, 22], [0, 30, 70, 100]), g
 
 
 def score_eps(fin):
@@ -72,7 +72,7 @@ def score_eps(fin):
     g = cagr(eps)
     if g is None and eps is not None and len(eps.dropna()) >= 3:
         return 0.0, None  # EPS ติดลบ/ขาดทุน
-    return interp(g, [0, 6, 12, 18], [0, 30, 70, 100]), g
+    return interp(g, [0, 10, 18, 28], [0, 30, 70, 100]), g
 
 
 def score_roic(fin):
@@ -81,7 +81,7 @@ def score_roic(fin):
         return None, None
     r = r.dropna()
     avg = float(r.mean())
-    base = interp(avg, [0, 8, 15, 25], [0, 30, 70, 100])
+    base = interp(avg, [0, 10, 20, 30], [0, 30, 70, 100])
     penalty = min(25.0, float(r.std(ddof=0)) * 1.2)  # ไม่สม่ำเสมอ -> หักคะแนน
     if float(r.min()) < 8:
         penalty += 8
@@ -93,7 +93,7 @@ def score_margin(fin):
     if om is None or om.dropna().empty:
         return None, None
     om = om.dropna() * 100
-    level = interp(float(om.iloc[-1]), [0, 10, 20, 30], [0, 40, 75, 100])
+    level = interp(float(om.iloc[-1]), [0, 15, 25, 40], [0, 40, 75, 100])
     trend = interp(float(om.iloc[-1] - om.iloc[0]), [-5, 0, 3, 8], [0, 50, 75, 100])
     return 0.6 * level + 0.4 * trend, float(om.iloc[-1])
 
@@ -106,7 +106,7 @@ def score_fcf(fin):
     if float(f.iloc[-1]) <= 0:
         return 10.0, None
     g = cagr(f)
-    gscore = interp(g, [-5, 0, 8, 15], [0, 30, 70, 100]) if g is not None else 20.0
+    gscore = interp(g, [-5, 0, 10, 20], [0, 30, 70, 100]) if g is not None else 20.0
     yoy = f.pct_change().dropna()
     frac = float((yoy > 0).mean()) if len(yoy) else 0.5
     return 0.6 * gscore + 0.4 * 100 * frac, g
@@ -125,7 +125,7 @@ def score_balance(fin):
         lev, years = 0.0, None
     else:
         years = nd / fcf_last
-        lev = interp(years, [0, 2, 4, 6], [100, 80, 40, 0])
+        lev = interp(years, [0, 1.5, 3, 5], [100, 80, 40, 0])
     cov = None
     if ebit is not None and intexp is not None and not intexp.dropna().empty:
         ie = abs(float(intexp.dropna().iloc[-1]))
@@ -150,7 +150,7 @@ def score_moat(fin, manual_tags: list[str] | None):
         proxy_parts.append(interp(float(roic.mean()), [8, 15, 25], [0, 50, 100]))
     proxy = float(np.mean(proxy_parts)) if proxy_parts else None
     if manual_tags:
-        manual = min(100.0, 30.0 * len(manual_tags) + 10)
+        manual = min(95.0, 25.0 * len(manual_tags) + 10)
         return (manual if proxy is None else 0.5 * manual + 0.5 * proxy), ", ".join(manual_tags)
     return proxy, "proxy"
 
@@ -161,14 +161,14 @@ def score_valuation(fin, info, eps_g, rev_g):
     peg = None
     if pe and pe > 0 and growth and growth > 0:
         peg = pe / min(growth, 40)
-    peg_s = interp(peg, [0.5, 1, 1.5, 2.5, 3.5], [100, 85, 65, 30, 0]) if peg is not None else None
+    peg_s = interp(peg, [0.8, 1.2, 2, 3], [100, 75, 35, 0]) if peg is not None else None
     if pe and pe > 0 and peg is None:
         peg_s = 10.0  # มี P/E แต่ไม่โต -> ไม่มีเหตุผลจ่ายแพง
     f, mc = fin.get("fcf"), info.get("marketCap")
     fy = None
     if f is not None and not f.dropna().empty and mc:
         fy = float(f.dropna().iloc[-1]) / mc * 100
-    fy_s = interp(fy, [0, 2, 4, 6], [0, 40, 75, 100]) if fy is not None else None
+    fy_s = interp(fy, [0, 2, 4, 7], [0, 35, 70, 100]) if fy is not None else None
     parts = [(peg_s, 0.6), (fy_s, 0.4)]
     parts = [(s, w) for s, w in parts if s is not None]
     if not parts:
@@ -209,10 +209,22 @@ def total_score(scores: dict, weights: dict) -> float | None:
 def rating(total: float | None, val_score: float | None) -> str:
     if total is None:
         return "ข้อมูลไม่พอ"
-    if total >= 70 and (val_score or 0) >= 50:
+    if total >= 75 and (val_score or 0) >= 60:
         return "น่าซื้อ"
-    if total >= 70:
+    if total >= 75:
         return "คุณภาพดี แต่ราคาตึง"
-    if total >= 55:
+    if total >= 60:
         return "น่าติดตาม"
     return "ไม่ผ่านเกณฑ์"
+
+
+def highlights(scores: dict, hi: float = 85, lo: float = 45) -> str:
+    """สรุปสั้น ๆ: เกณฑ์ที่เด่น / เกณฑ์ที่อ่อน"""
+    good = [k for k, v in sorted(scores.items(), key=lambda x: -(x[1] or 0)) if v is not None and v >= hi][:3]
+    bad = [k for k, v in sorted(scores.items(), key=lambda x: (x[1] if x[1] is not None else 999)) if v is not None and v < lo][:2]
+    parts = []
+    if good:
+        parts.append("เด่น: " + ", ".join(good))
+    if bad:
+        parts.append("อ่อน: " + ", ".join(bad))
+    return " | ".join(parts) or "ปานกลางทุกด้าน"
