@@ -1,10 +1,12 @@
 """Quality-Growth Screener: จัดอันดับหุ้น/ETF สหรัฐตามเกณฑ์ 8 ข้อ
 รัน:  streamlit run app.py
 """
+import json
 import os
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import data as D
 import scoring as S
@@ -21,8 +23,41 @@ st.markdown("""<style>
 .block-container {background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.015));
     border: 1px solid rgba(255,255,255,.09); border-radius: 16px; padding: 2rem 2.2rem; margin-top: 1rem;
     box-shadow: 0 10px 40px rgba(0,0,0,.55);}
+[data-testid="stMetric"] {background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.02));
+    border: 1px solid rgba(255,255,255,.10); border-radius: 12px; padding: 12px 16px;}
+[data-testid="stMetricValue"] {font-size: 1.9rem;}
 </style>""", unsafe_allow_html=True)
 
+
+def tv_widget(kind: str, config: dict, height: int):
+    """ฝังวิดเจ็ตฟรีของ TradingView (โหลดผ่านเบราว์เซอร์ของผู้ใช้ ไม่ผ่านเซิร์ฟเวอร์แอพ)"""
+    src = f"https://s3.tradingview.com/external-embedding/embed-widget-{kind}.js"
+    html = (f'<body style="margin:0;background:transparent"><div class="tradingview-widget-container" '
+            f'style="height:{height}px;width:100%"><div class="tradingview-widget-container__widget" '
+            f'style="height:100%;width:100%"></div><script type="text/javascript" src="{src}" async>'
+            f'{json.dumps(config)}</script></div></body>')
+    if hasattr(st, "iframe"):  # Streamlit ใหม่: components.html ถูกยกเลิกแล้ว
+        st.iframe(html, height=height)
+    else:
+        components.html(html, height=height)
+
+
+def tv_symbol(t: str) -> str:
+    return t.replace("-", ".")  # BRK-B -> BRK.B
+
+
+# ------------------------------------------------------------------ Watchlist ในลิงก์ (จำค่าได้ด้วย URL)
+qp = st.query_params
+if "universe" not in st.session_state and qp.get("wl"):
+    st.session_state["universe"] = qp["wl"].replace(",", " ")
+_w0 = dict(S.DEFAULT_WEIGHTS)
+try:
+    if qp.get("w"):
+        _vals = [int(x) for x in qp["w"].split(",")]
+        if len(_vals) == len(S.CRITERIA):
+            _w0 = dict(zip(S.CRITERIA, _vals))
+except ValueError:
+    pass
 
 # ------------------------------------------------------------------ Sidebar
 with st.sidebar:
@@ -46,13 +81,31 @@ with st.sidebar:
             _load(name, lambda n=name: D.load_group(n))
     if st.button("ค่าเริ่มต้น", key="grp_default", width="stretch", help="กลับไปใช้รายชื่อตั้งต้น 40 ตัว"):
         st.session_state.pop("universe", None)
+        if "wl" in st.query_params:
+            del st.query_params["wl"]
     universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
-        weights = {k: st.slider(k, 0, 30, S.DEFAULT_WEIGHTS[k]) for k in S.CRITERIA}
+        weights = {k: st.slider(k, 0, 30, _w0[k]) for k in S.CRITERIA}
+    if st.button("บันทึก Watchlist + น้ำหนักลงในลิงก์", key="save_wl", width="stretch",
+                 help="จำรายชื่อและน้ำหนักไว้ใน URL ของหน้านี้ แล้วบุ๊กมาร์กลิงก์ไว้ เปิดครั้งหน้าจะได้ชุดเดิม"):
+        if len(tickers) > 250:
+            st.warning("รายชื่อยาวเกินไปสำหรับเก็บในลิงก์ (เกิน 250 ตัว)")
+        else:
+            st.query_params["wl"] = ",".join(tickers)
+            st.query_params["w"] = ",".join(str(weights[k]) for k in S.CRITERIA)
+            st.toast("บันทึกแล้ว: บุ๊กมาร์กลิงก์ของหน้านี้ไว้ เปิดครั้งหน้าจะได้รายชื่อและน้ำหนักชุดเดิม")
     refresh = st.select_slider("รีเฟรชราคาทุก (วินาที)", [15, 30, 60, 120, 300], value=60)
     min_score = st.slider("คะแนนรวมขั้นต่ำ", 0, 90, 0)
 
+tv_widget("ticker-tape", {
+    "symbols": [
+        {"proName": "FOREXCOM:SPXUSD", "title": "S&P 500"}, {"proName": "FOREXCOM:NSXUSD", "title": "Nasdaq 100"},
+        {"proName": "AMEX:VOO", "title": "VOO"}, {"proName": "NASDAQ:QQQM", "title": "QQQM"},
+        {"proName": "NASDAQ:SMH", "title": "SMH"}, {"proName": "AMEX:GLDM", "title": "GLDM"},
+        {"proName": "NASDAQ:NVDA", "title": "NVDA"}, {"proName": "NASDAQ:MSFT", "title": "MSFT"},
+        {"proName": "NASDAQ:AAPL", "title": "AAPL"}, {"proName": "BITSTAMP:BTCUSD", "title": "BTC"}],
+    "showSymbolLogo": True, "isTransparent": True, "displayMode": "adaptive", "colorTheme": "dark", "locale": "th_TH"}, 76)
 st.title("Quality Growth Screener")
 st.caption("ข้อมูลงบการเงินอัปเดตรายปี/ไตรมาส (แคช 12 ชม.) ส่วนราคารีเฟรชอัตโนมัติ · Yahoo ฟรีดีเลย์ประมาณ 15 นาที · ไม่ใช่คำแนะนำการลงทุน")
 
@@ -104,7 +157,17 @@ scored = {t: v for t, v in scored.items() if v}
 others = [t for t in tickers if t not in scored and fund.get(t, {}).get("type") == "ETF"]  # ETF ทอง/พันธบัตร ไม่มีงบให้ประเมิน
 failed = [t for t in tickers if t not in scored and t not in others]
 
-tab1, tab2, tab3 = st.tabs(["Screener", "รายละเอียดรายตัว", "วิธีคิดคะแนน"])
+# ------------------------------------------------------------------ KPI
+tots = {t: S.total_score(r["scores"], weights) for t, r in scored.items()}
+ratings = {t: S.rating(tots[t], scored[t]["scores"].get("Valuation")) for t in scored}
+valid = [v for v in tots.values() if v is not None]
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("สแกนทั้งหมด", len(scored) + len(others))
+k2.metric("น่าซื้อ", sum(1 for v in ratings.values() if v == "น่าซื้อ"))
+k3.metric("คุณภาพดี แต่ราคาตึง", sum(1 for v in ratings.values() if v == "คุณภาพดี แต่ราคาตึง"))
+k4.metric("คะแนนเฉลี่ย", f"{sum(valid) / len(valid):.0f}" if valid else "-")
+
+tab1, tab_heat, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "วิธีคิดคะแนน"])
 
 # ------------------------------------------------------------------ Tab 1
 with tab1:
@@ -177,29 +240,54 @@ with tab1:
                   .format(fmt, na_rep="-"))
         st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored) + len(others)} ตัว · "
                    "สีเขียว >= 75 · เหลือง 55-74 · แดง < 55")
-        st.dataframe(styled, column_config=cfg, width="stretch", height=600)
+        c_a, c_b = st.columns([5, 1])
+        c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อดูกราฟและรายละเอียดด้านล่างตาราง")
+        c_b.download_button("ดาวน์โหลด CSV", view.drop(columns=trend).to_csv(index=False).encode("utf-8-sig"),
+                            file_name="screener.csv", mime="text/csv", width="stretch")
+        ev = st.dataframe(styled, column_config=cfg, width="stretch", height=560,
+                          on_select="rerun", selection_mode="single-row", key="tbl")
+        rows_sel = list(ev.selection.rows) if ev is not None and ev.selection else []
+        if rows_sel != st.session_state.get("_last_rows"):
+            st.session_state["_last_rows"] = rows_sel
+            if rows_sel:
+                st.session_state["sel"] = view.iloc[rows_sel[0]]["Ticker"]
+                st.rerun()  # รีเฟรชทั้งหน้าเพื่อแสดงกราฟของตัวที่เลือก (ตารางเองรีเฟรชราคาโดยกราฟไม่ถูกโหลดใหม่)
 
     table()
     if failed:
         st.warning(f"ดึงข้อมูลไม่ได้/ข้อมูลไม่พอ: {', '.join(failed)}")
 
-# ------------------------------------------------------------------ Tab 2
-with tab2:
-    if scored:
-        pick = st.selectbox("เลือกตัว", list(scored))
-        r = scored[pick]
-        tot = S.total_score(r["scores"], weights)
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", S.rating(tot, r["scores"].get("Valuation")))
-            st.bar_chart(pd.Series({k: (v or 0) for k, v in r["scores"].items()}), horizontal=True)
-        with c2:
-            st.subheader("ตัวเลขที่ใช้")
-            m = pd.DataFrame({"ค่า": {k: (f"{v:.2f}" if isinstance(v, float) else v) for k, v in r["metrics"].items() if v is not None}})
-            st.dataframe(m, width="stretch")
-            missing = [k for k, v in r["scores"].items() if v is None]
-            if missing:
-                st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
+# ------------------------------------------------------------------ รายละเอียดตัวที่เลือก (อยู่ใต้ตารางใน tab Screener)
+with tab1:
+    sel = st.session_state.get("sel")
+    if sel in scored or sel in others:
+        st.subheader(f"{sel} · {fund[sel]['name']}")
+        cc1, cc2 = st.columns([3, 2])
+        with cc1:
+            tv_widget("advanced-chart", {
+                "autosize": True, "symbol": tv_symbol(sel), "interval": "D", "timezone": "Asia/Bangkok",
+                "theme": "dark", "style": "1", "locale": "th_TH", "backgroundColor": "rgba(0,0,0,0)",
+                "allow_symbol_change": True, "hide_side_toolbar": False, "support_host": "https://www.tradingview.com"}, 560)
+        with cc2:
+            if sel in scored:
+                r = scored[sel]
+                tot = tots[sel]
+                st.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", ratings[sel])
+                st.bar_chart(pd.Series({k: (v or 0) for k, v in r["scores"].items()}), horizontal=True, height=300)
+                m = {k: (f"{v:.2f}" if isinstance(v, float) else v) for k, v in r["metrics"].items() if v is not None}
+                st.dataframe(pd.DataFrame({"ค่า": m}), width="stretch")
+                missing = [k for k, v in r["scores"].items() if v is None]
+                if missing:
+                    st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
+            else:
+                st.info("ETF ประเภทนี้ (ทอง/ตราสารหนี้/อื่น ๆ) ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟราคา")
+
+with tab_heat:
+    src = st.radio("ตลาด", ["S&P 500", "Nasdaq 100"], horizontal=True)
+    tv_widget("stock-heatmap", {
+        "dataSource": "SPX500" if src == "S&P 500" else "NASDAQ100", "grouping": "sector", "blockSize": "market_cap_basic",
+        "blockColor": "change", "locale": "th_TH", "colorTheme": "dark", "hasTopBar": True, "isDataSetEnabled": False,
+        "isZoomEnabled": True, "hasSymbolTooltip": True, "isMonoSize": False, "width": "100%", "height": "100%"}, 680)
 
 # ------------------------------------------------------------------ Tab 3
 with tab3:
