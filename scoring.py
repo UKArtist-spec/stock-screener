@@ -296,3 +296,64 @@ def highlights(scores: dict, hi: float = 85, lo: float = 45) -> str:
     if bad:
         parts.append("อ่อน: " + ", ".join(bad))
     return " | ".join(parts) or "ปานกลางทุกด้าน"
+
+
+# ---------------------------------------------------------------- คำอธิบายภาษาคน
+CRITERIA_TH = {
+    "Revenue Growth": "รายได้โต", "EPS Growth": "กำไรต่อหุ้นโต", "ROIC": "ผลตอบแทนเงินลงทุน", "Margin": "อัตรากำไร",
+    "FCF": "เงินสดอิสระ", "Balance Sheet": "งบดุล/หนี้", "Moat": "ความได้เปรียบ", "Valuation": "ราคาถูก-แพง",
+}
+
+
+def plain_summary(scores: dict, timing_label: str = "-") -> str:
+    """สรุปหุ้นเป็นประโยคสั้น ๆ ที่คนไม่ใช่นักการเงินอ่านเข้าใจ"""
+    def avg(*ks):
+        v = [scores.get(k) for k in ks if scores.get(k) is not None]
+        return sum(v) / len(v) if v else None
+
+    parts = []
+    g = avg("Revenue Growth", "EPS Growth")
+    if g is not None:
+        parts.append("ธุรกิจโตเร็ว" if g >= 75 else ("โตปานกลาง" if g >= 50 else "โตช้า"))
+    q = avg("ROIC", "Margin")
+    if q is not None and q >= 75:
+        parts.append("ทำกำไรได้ดีมาก")
+    elif q is not None and q < 40:
+        parts.append("ทำกำไรได้ไม่เด่น")
+    bs = scores.get("Balance Sheet")
+    if bs is not None and bs >= 75:
+        parts.append("หนี้น้อย เงินสดแน่น")
+    elif bs is not None and bs < 45:
+        parts.append("ระวังภาระหนี้")
+    v = scores.get("Valuation")
+    if v is not None:
+        parts.append("ราคายังไม่แพง" if v >= 65 else ("ราคาค่อนข้างแพง" if v <= 40 else "ราคาพอสมควร"))
+    if timing_label.startswith(ZONE):
+        parts.append("ราคาเพิ่งย่อตัว น่าจับตา")
+    elif timing_label.startswith("ต่ำกว่า MA200"):
+        parts.append("ราคาอยู่ในขาลง ควรระวัง")
+    elif timing_label.startswith("ใกล้จุดสูงสุด"):
+        parts.append("ราคาอยู่ใกล้จุดสูงสุด")
+    return " · ".join(parts) if parts else "ข้อมูลไม่พอสรุป"
+
+
+def explain_rows(scores: dict, m: dict) -> list[tuple[str, float | None, str]]:
+    """(ชื่อเกณฑ์, คะแนน, ความหมายของตัวเลขเป็นภาษาคน)"""
+    def f(x, spec="{:.0f}"):
+        return None if x is None or (isinstance(x, float) and np.isnan(x)) else spec.format(x)
+
+    txt = {}
+    txt["Revenue Growth"] = f"รายได้โตเฉลี่ย {f(m.get('Revenue CAGR %'))}% ต่อปี" if f(m.get("Revenue CAGR %")) else "ไม่มีข้อมูลการเติบโต"
+    txt["EPS Growth"] = f"กำไรต่อหุ้นโตเฉลี่ย {f(m.get('EPS CAGR %'))}% ต่อปี" if f(m.get("EPS CAGR %")) else "ขาดทุน หรือไม่มีข้อมูล"
+    txt["ROIC"] = (f"เงินลงทุน 100 บาท สร้างกำไรได้ราว {f(m.get('ROIC avg %'))} บาทต่อปี" if f(m.get("ROIC avg %")) else "ไม่มีข้อมูล")
+    txt["Margin"] = (f"ขายของ 100 บาท เหลือกำไรจากการดำเนินงาน {f(m.get('Op margin %'))} บาท" if f(m.get("Op margin %")) else "ไม่มีข้อมูล")
+    txt["FCF"] = (f"เงินสดอิสระโตเฉลี่ย {f(m.get('FCF CAGR %'))}% ต่อปี" if f(m.get("FCF CAGR %")) else "เงินสดอิสระต่ำหรือติดลบ")
+    y = m.get("ปีที่ FCF ล้างหนี้สุทธิ")
+    txt["Balance Sheet"] = ("มีเงินสดมากกว่าหนี้" if y == 0 else (f"ใช้เงินสดอิสระราว {y:.1f} ปีก็ล้างหนี้สุทธิได้" if y else "ไม่มีข้อมูล/ภาระหนี้สูง"))
+    txt["Moat"] = f"ปัจจัยที่ทำให้แข่งขันยาก: {m['Moat']}" if m.get("Moat") not in (None, "proxy") else "ประเมินจากอัตรากำไรและ ROIC เท่านั้น"
+    peg, pe = m.get("PEG"), m.get("Forward P/E") or m.get("Trailing P/E")
+    if peg:
+        txt["Valuation"] = f"ราคาเป็น {f(pe)} เท่าของกำไร (PEG {peg:.1f}: ต่ำกว่าประมาณ 1.2 ถือว่าไม่แพงเมื่อเทียบกับการเติบโต)"
+    else:
+        txt["Valuation"] = "ไม่มีข้อมูลเพียงพอ"
+    return [(CRITERIA_TH[k], scores.get(k), txt[k]) for k in CRITERIA]

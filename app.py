@@ -32,6 +32,13 @@ st.markdown("""<style>
 .pk-t {font-size: 1.35rem; font-weight: 700;} .pk-n {font-size: .78rem; opacity: .65; height: 1.1rem; overflow: hidden; white-space: nowrap;}
 .pk-s {font-size: 2.3rem; font-weight: 800; line-height: 1.25;} .pk-r {font-size: .85rem; font-weight: 600;}
 .pk-m {font-size: .78rem; opacity: .8; margin-top: 2px;} .pk-p {font-size: .9rem; margin-top: 6px;}
+.vc {background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(255,255,255,.02)); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 16px; padding: 16px 16px 10px 16px; margin-bottom: 6px; min-height: 330px;}
+.vc-top {display: flex; justify-content: space-between; align-items: center; gap: 8px;}
+.vc-t {font-size: 1.3rem; font-weight: 800; line-height: 1.1;} .vc-n {font-size: .76rem; opacity: .65; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.bd {display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 600; margin: 8px 4px 0 0;}
+.vc-p {font-size: 1.05rem; font-weight: 600; margin-top: 8px;} .vc-s {font-size: .78rem; opacity: .85; line-height: 1.45; min-height: 4.4em; margin-top: 4px;}
+.vc-x {font-size: .72rem; opacity: .6;}
 </style>""", unsafe_allow_html=True)
 
 
@@ -92,7 +99,7 @@ with st.sidebar:
     universe_txt = st.text_area("หุ้น/ETF ที่ต้องการสแกน (พิมพ์ ticker คั่นด้วยเว้นวรรค)", st.session_state.get("universe", " ".join(D.DEFAULT_UNIVERSE)), height=140)
     tickers = sorted({t.strip().upper() for t in universe_txt.replace(",", " ").split() if t.strip()})
     with st.expander("น้ำหนักเกณฑ์ (กดเพื่อปรับ)"):
-        weights = {k: st.slider(k, 0, 30, _w0[k]) for k in S.CRITERIA}
+        weights = {k: st.slider(f"{S.CRITERIA_TH[k]} ({k})", 0, 30, _w0[k]) for k in S.CRITERIA}
     if st.button("บันทึก Watchlist + น้ำหนักลงในลิงก์", key="save_wl", width="stretch",
                  help="จำรายชื่อและน้ำหนักไว้ใน URL ของหน้านี้ แล้วบุ๊กมาร์กลิงก์ไว้ เปิดครั้งหน้าจะได้ชุดเดิม"):
         if len(tickers) > 250:
@@ -114,6 +121,18 @@ tv_widget("ticker-tape", {
     "showSymbolLogo": True, "isTransparent": True, "displayMode": "adaptive", "colorTheme": "dark", "locale": "th_TH"}, 76)
 st.title("Quality Growth Screener")
 st.caption("ข้อมูลงบการเงินอัปเดตรายปี/ไตรมาส (แคช 12 ชม.) ส่วนราคารีเฟรชอัตโนมัติ · Yahoo ฟรีดีเลย์ประมาณ 15 นาที · ไม่ใช่คำแนะนำการลงทุน")
+
+with st.expander("เริ่มต้นใช้งานใน 30 วินาที (กดเพื่ออ่าน)", expanded=not st.session_state.get("intro_seen")):
+    st.markdown("""
+**1. คะแนน 0-100 = คุณภาพของธุรกิจ** วัดจาก 8 ด้าน เช่น โตเร็วไหม กำไรดีไหม หนี้เยอะไหม ราคาแพงไหม ยิ่งสูงยิ่งดี (เขียว = ดี, เหลือง = กลาง, แดง = อ่อน)
+
+**2. จังหวะราคา = ตอนนี้น่าจับตาไหม** แยกจากคะแนน หุ้นดีที่ราคาเพิ่งย่อลงมา คือจังหวะที่น่าสนใจ ส่วนตัวที่ราคาอยู่ในขาลงควรระวัง
+
+**3. กดปุ่ม "ดูรายละเอียด + ข่าว" ใต้การ์ดใบไหนก็ได้** จะเห็นกราฟราคา ข่าว และคำอธิบายคะแนนแต่ละข้อเป็นภาษาง่าย ๆ
+
+ETF คือกองทุนที่รวมหุ้นหลายตัวไว้ในตัวเดียว แอพนี้เป็นเครื่องมือคัดกรองเบื้องต้น ไม่ใช่คำแนะนำให้ซื้อหรือขาย
+""")
+st.session_state["intro_seen"] = True
 
 
 # ------------------------------------------------------------------ Data
@@ -216,33 +235,137 @@ k2.metric("ผ่านเกณฑ์เด่น", len(top_now), help="คะ�
 k3.metric("เด่น + ย่อเข้าโซน", len(zone_now), help="ผ่านเกณฑ์เด่น และราคาย่อจากจุดสูงสุด 8-25% โดยยังเหนือ MA200")
 k4.metric("คะแนนเฉลี่ย", f"{sum(valid) / len(valid):.0f}" if valid else "-")
 
-top5 = sorted([t for t in vis if tots[t] is not None], key=lambda t: -tots[t])[:5]
-if top5:
-    st.markdown("##### Top 5 คะแนนสูงสุด")
-    cols5 = st.columns(5)
-    for c, t in zip(cols5, top5):
-        tot = tots[t]
-        col = "#2ea043" if tot >= 75 else ("#d29922" if tot >= 55 else "#f85149")
-        price = chg = None
-        if t in q_all.index:
-            price, chg = q_all.loc[t, "Price"], q_all.loc[t, "Today %"]
-        pline = "" if price is None else (f'${price:,.2f} <span style="color:{"#2ea043" if chg >= 0 else "#f85149"}">{chg:+.2f}%</span>')
-        c.markdown(f'<div class="pick"><div class="pk-t">{_html.escape(t)}</div><div class="pk-n">{_html.escape(fund[t]["name"])}</div>'
-                   f'<div class="pk-s" style="color:{col}">{tot:.0f}</div><div class="pk-r">{ratings[t]}</div>'
-                   f'<div class="pk-m">{timing_of(t, q_all)}</div><div class="pk-p">{pline}</div></div>', unsafe_allow_html=True)
-        if c.button("ดูกราฟ + ข่าว", key=f"pick_{t}", width="stretch"):
-            st.session_state["sel"] = t
 
-tab1, tab_heat, tab_news, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "ข่าวตลาด", "วิธีคิดคะแนน"])
+# ------------------------------------------------------------------ helper: การ์ด / กราฟย่อ / เรดาร์
+def earnings_days(t: str):
+    try:
+        d = (pd.Timestamp(fund[t].get("next_earnings")).normalize() - pd.Timestamp.now().normalize()).days
+        return d if d >= 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def spark_svg(vals) -> str:
+    vals = [float(v) for v in vals if v is not None and not pd.isna(v)] if isinstance(vals, (list, tuple)) else []
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    pts = " ".join(f"{i * 200 / (len(vals) - 1):.1f},{42 - (v - lo) / rng * 38:.1f}" for i, v in enumerate(vals))
+    col = "#30a46c" if vals[-1] >= vals[0] else "#e5484d"
+    return (f'<svg viewBox="0 0 200 44" preserveAspectRatio="none" style="width:100%;height:46px;margin-top:6px">'
+            f'<polygon points="0,44 {pts} 200,44" fill="{col}" opacity=".16"/>'
+            f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>')
+
+
+BADGE = {S.TOP: "#1f7a4d", S.QUALITY_PRICEY: "#8a6414", "น่าติดตาม": "#2a5d9a", "ไม่ผ่านเกณฑ์": "#5b6270"}
+
+
+def card_html(r: dict) -> str:
+    t = r["Ticker"]
+    tot = r.get("คะแนนรวม")
+    has = tot is not None and not pd.isna(tot)
+    col = "#30a46c" if has and tot >= 75 else ("#d29922" if has and tot >= 55 else "#e5484d")
+    ring = (f'<div style="width:62px;height:62px;border-radius:50%;background:conic-gradient({col} {tot:.0f}%,rgba(255,255,255,.12) 0);'
+            f'display:flex;align-items:center;justify-content:center"><div style="width:48px;height:48px;border-radius:50%;background:#0c1428;'
+            f'display:flex;align-items:center;justify-content:center;font-weight:800;color:{col}">{tot:.0f}</div></div>') if has else ""
+    status = r.get("สถานะ", "")
+    b_status = f'<span class="bd" style="background:{BADGE.get(status, "#444b58")}">{_html.escape(str(status))}</span>' if has else \
+        '<span class="bd" style="background:#444b58">ไม่มีคะแนนธุรกิจ</span>'
+    tm = str(r.get("จังหวะราคา", "-"))
+    tcol = "#1f7a4d" if tm.startswith(S.ZONE) else ("#a83a3a" if tm.startswith("ต่ำกว่า") else ("#8a6414" if tm.startswith("ย่อลึก") else "#3a4152"))
+    b_time = f'<span class="bd" style="background:{tcol}">{_html.escape(tm)}</span>' if tm != "-" else ""
+    etf = '<span class="bd" style="background:#4a3f78">ETF</span>' if fund[t]["type"] == "ETF" else ""
+    chg_key = "Today %" if period == "รายวัน" else "1M %"
+    price, chg, fh = r.get("Price"), r.get(chg_key), r.get("From 52w high %")
+    ok = lambda x: x is not None and not pd.isna(x)  # noqa: E731
+    pline = ""
+    if ok(price):
+        cc = "#30a46c" if ok(chg) and chg >= 0 else "#e5484d"
+        pline = f'${price:,.2f}' + (f' <span style="color:{cc};font-size:.85rem">{chg:+.2f}% {"วันนี้" if period == "รายวัน" else "1 เดือน"}</span>' if ok(chg) else "")
+    if t in scored:
+        summ = S.plain_summary(scored[t]["scores"], tm)
+    else:
+        summ = "ETF ประเภทนี้ไม่ได้ถือหุ้น (ทอง/ตราสารหนี้/อื่น ๆ) จึงไม่มีคะแนนธุรกิจ ดูได้แค่ราคาและแนวโน้ม"
+    extra = []
+    if ok(fh):
+        extra.append(f"ห่างจากจุดสูงสุด 1 ปี {fh:.0f}%")
+    d = earnings_days(t)
+    if d is not None and d <= 14:
+        extra.append(f"ประกาศงบอีก {d} วัน")
+    return (f'<div class="vc"><div class="vc-top"><div><div class="vc-t">{_html.escape(t)}</div>'
+            f'<div class="vc-n">{_html.escape(str(r.get("ชื่อ", "")))}</div></div>{ring}</div>'
+            f'<div>{b_status}{b_time}{etf}</div><div class="vc-p">{pline}</div>{spark_svg(r.get("1Y trend"))}'
+            f'<div class="vc-s">{_html.escape(summ)}</div><div class="vc-x">{_html.escape(" · ".join(extra))}</div></div>')
+
+
+def radar(scores: dict):
+    labels = [S.CRITERIA_TH[k] for k in scores]
+    vals = [scores[k] or 0 for k in scores]
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        st.bar_chart(pd.Series(dict(zip(labels, vals))), horizontal=True, height=300)
+        return
+    fig = go.Figure(go.Scatterpolar(r=vals + vals[:1], theta=labels + labels[:1], fill="toself",
+                                    line=dict(color="#30a46c"), fillcolor="rgba(48,164,108,.30)"))
+    fig.update_layout(polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(range=[0, 100], gridcolor="rgba(255,255,255,.15)", tickfont=dict(size=9)),
+                                 angularaxis=dict(gridcolor="rgba(255,255,255,.15)")),
+                      paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E6EDF3"), margin=dict(l=80, r=80, t=20, b=20),
+                      height=340, showlegend=False)
+    st.plotly_chart(fig, width="stretch")
+
+
+@st.dialog("รายละเอียดหุ้น", width="large")
+def detail_dialog(sel: str):
+    st.subheader(f"{sel} · {fund[sel]['name']}")
+    tm = timing_of(sel, q_all)
+    st.caption(f"กลุ่ม: {sector_of(sel)} · ประกาศงบครั้งถัดไป: {earnings_of(sel)}")
+    if sel in scored:
+        r = scored[sel]
+        tot = tots[sel]
+        st.markdown(f"**สรุปสั้น ๆ:** {S.plain_summary(r['scores'], tm)}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", help="คุณภาพธุรกิจโดยรวม 0-100")
+        m2.metric("สถานะ", ratings[sel])
+        m3.metric("จังหวะราคา", tm, help="ดูจากระยะที่ราคาย่อจากจุดสูงสุด และแนวโน้มเทียบเส้นค่าเฉลี่ย 200 วัน")
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        tv_widget("advanced-chart", {
+            "autosize": True, "symbol": tv_full(sel), "interval": "D", "timezone": "Asia/Bangkok",
+            "theme": "dark", "style": "1", "locale": "th_TH", "backgroundColor": "rgba(0,0,0,0)",
+            "allow_symbol_change": True, "hide_side_toolbar": False, "support_host": "https://www.tradingview.com"}, 480)
+    with c2:
+        if sel in scored:
+            radar(r["scores"])
+        else:
+            st.info("ETF ประเภทนี้ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟและข่าว")
+    if sel in scored:
+        st.markdown("**คะแนนแต่ละด้าน แปลเป็นภาษาคน**")
+        exp = pd.DataFrame(S.explain_rows(r["scores"], r["metrics"]), columns=["เกณฑ์", "คะแนน", "หมายความว่า"])
+        st.dataframe(exp, hide_index=True, width="stretch",
+                     column_config={"คะแนน": st.column_config.ProgressColumn("คะแนน", min_value=0, max_value=100, format="%.0f")})
+        missing = [S.CRITERIA_TH[k] for k, v in r["scores"].items() if v is None]
+        if missing:
+            st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
+    st.markdown(f"**ข่าวของ {sel}**")
+    tv_widget("timeline", {"feedMode": "symbol", "symbol": tv_full(sel), "isTransparent": True, "displayMode": "regular",
+                           "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 420)
+    st.caption("คะแนนเป็นข้อมูลคัดกรองเบื้องต้น ไม่ใช่คำแนะนำให้ซื้อหรือขาย")
+
+
+tab1, tab_heat, tab_news, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "ข่าวตลาด", "คู่มือ & วิธีคิดคะแนน"])
 
 # ------------------------------------------------------------------ Tab 1
 with tab1:
-    o1, o2, o3 = st.columns([1.2, 1, 1])
-    period = o1.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
-                      help="รายวัน = แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน (ทั้งสองแบบมีระยะห่างจาก High 52 สัปดาห์)")
-    compact = o2.toggle("โหมดตารางย่อ", value=True, help="ซ่อนคอลัมน์คะแนน 8 เกณฑ์ (ดูรายละเอียดได้ในกราฟเรดาร์ตอนคลิกแถว)")
-    only_buy = o3.checkbox("เฉพาะ 'ผ่านเกณฑ์เด่น'", help="คะแนนรวม >= 75 และ Valuation >= 60")
-    only_zone = o3.checkbox("เฉพาะที่ย่อเข้าโซน", help="ราคาย่อจากจุดสูงสุด 8-25% และยังเหนือ MA200")
+    v1, v2 = st.columns(2)
+    view_mode = v1.radio("มุมมอง", ["การ์ด", "ตาราง"], horizontal=True)
+    period = v2.radio("รอบการดู", ["รายวัน", "รายเดือน"], horizontal=True,
+                      help="รายวัน = แสดงการเปลี่ยนแปลงวันนี้ · รายเดือน = แสดงการเปลี่ยนแปลง 1 เดือน")
+    f1, f2, f3 = st.columns(3)
+    only_buy = f1.checkbox("เฉพาะ 'ผ่านเกณฑ์เด่น'", help="คะแนนรวม >= 75 และ Valuation >= 60")
+    only_zone = f2.checkbox("เฉพาะที่ย่อเข้าโซน", help="ราคาย่อจากจุดสูงสุด 8-25% และยังเหนือ MA200")
+    compact = f3.toggle("ตารางแบบย่อ", value=True, disabled=view_mode == "การ์ด", help="ซ่อนคอลัมน์คะแนน 8 เกณฑ์ (มีผลเฉพาะมุมมองตาราง)")
 
     @st.fragment(run_every=refresh)
     def table():
@@ -265,7 +388,7 @@ with tab1:
                         "จุดเด่น / จุดอ่อน": S.highlights(r["scores"])})
             row.update({k: r["scores"].get(k) for k in S.CRITERIA})
             rows.append(row)
-        df = pd.DataFrame(rows, columns=None) if rows else pd.DataFrame(columns=["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา"])
+        df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา"])
         if not df.empty:
             df = df[df["คะแนนรวม"].notna() & (df["คะแนนรวม"] >= min_score)]
             if only_buy:
@@ -288,8 +411,25 @@ with tab1:
         if df.empty:
             st.info("ไม่มีหุ้นที่ตรงเงื่อนไขตอนนี้ ลองผ่อนตัวกรองด้านบนหรือลดคะแนนขั้นต่ำ")
             return
-        move = ["Today %"] if period == "รายวัน" else ["1M %"]
-        move += ["From 52w high %"]
+        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored) + len(others)} ตัว · เรียงจากคะแนนสูงไปต่ำ")
+
+        # ---------------- มุมมองการ์ด
+        if view_mode == "การ์ด":
+            n_show = st.session_state.get("n_show", 24)
+            recs = df.head(n_show).to_dict("records")
+            for i in range(0, len(recs), 4):
+                for c, r in zip(st.columns(4), recs[i:i + 4]):
+                    c.markdown(card_html(r), unsafe_allow_html=True)
+                    if c.button("ดูรายละเอียด + ข่าว", key=f"card_{r['Ticker']}", width="stretch"):
+                        st.session_state["open_detail"] = r["Ticker"]
+                        st.rerun()
+            if len(df) > n_show and st.button(f"แสดงเพิ่มอีก 24 ตัว (เหลือ {len(df) - n_show})", key="more"):
+                st.session_state["n_show"] = n_show + 24
+                st.rerun(scope="fragment")
+            return
+
+        # ---------------- มุมมองตาราง
+        move = (["Today %"] if period == "รายวัน" else ["1M %"]) + ["From 52w high %"]
         trend = ["1Y trend"]
         score_cols = ["คะแนนรวม"] + S.CRITERIA
         cols = ["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา", "จุดเด่น / จุดอ่อน", "กลุ่ม", "ชื่อ", "Price"] + move + ["ประกาศงบ"] + trend
@@ -304,6 +444,7 @@ with tab1:
                "RSI": st.column_config.NumberColumn("RSI(14)", format="%.0f"),
                "1Y trend": st.column_config.LineChartColumn("แนวโน้ม 1 ปี"),
                "จุดเด่น / จุดอ่อน": st.column_config.TextColumn("จุดเด่น / จุดอ่อน", width="large")}
+        cfg.update({k: st.column_config.NumberColumn(S.CRITERIA_TH[k]) for k in S.CRITERIA})
         for c in move:
             cfg.setdefault(c, st.column_config.NumberColumn(c, format="%.2f%%"))
 
@@ -326,10 +467,8 @@ with tab1:
         styled = (view.style.map(shade, subset=sc)
                   .map(move_color, subset=[c for c in move if c in view and c != "From 52w high %"])
                   .format({c: "{:.0f}" for c in sc}, na_rep="-"))
-        st.caption(f"อัปเดตล่าสุด {pd.Timestamp.now():%H:%M:%S} · แสดง {len(df)} จาก {len(scored) + len(others)} ตัว · "
-                   "สีเขียว >= 75 · เหลือง 55-74 · แดง < 55")
         c_a, c_b = st.columns([5, 1])
-        c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อดูกราฟ ข่าว และเรดาร์ของตัวนั้นด้านล่างตาราง")
+        c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อเปิดหน้าต่างรายละเอียด กราฟ และข่าว")
         c_b.download_button("ดาวน์โหลด CSV", view.drop(columns=[c for c in trend if c in view]).to_csv(index=False).encode("utf-8-sig"),
                             file_name="screener.csv", mime="text/csv", width="stretch")
         ev = st.dataframe(styled, column_config=cfg, width="stretch", height=560,
@@ -338,63 +477,79 @@ with tab1:
         if rows_sel != st.session_state.get("_last_rows"):
             st.session_state["_last_rows"] = rows_sel
             if rows_sel:
-                st.session_state["sel"] = view.iloc[rows_sel[0]]["Ticker"]
+                st.session_state["open_detail"] = view.iloc[rows_sel[0]]["Ticker"]
                 st.rerun()
 
     table()
     if failed:
         st.warning(f"ดึงข้อมูลไม่ได้/ข้อมูลไม่พอ: {', '.join(failed)}")
 
-    # ---- รายละเอียดตัวที่เลือก: กราฟ + เรดาร์ + ข่าว
-    def radar(scores: dict):
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            st.bar_chart(pd.Series({k: (v or 0) for k, v in scores.items()}), horizontal=True, height=300)
-            return
-        labels = list(scores)
-        vals = [scores[k] or 0 for k in labels]
-        fig = go.Figure(go.Scatterpolar(r=vals + vals[:1], theta=labels + labels[:1], fill="toself",
-                                        line=dict(color="#2ea043"), fillcolor="rgba(46,160,67,.30)"))
-        fig.update_layout(polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(range=[0, 100], gridcolor="rgba(255,255,255,.15)", tickfont=dict(size=9)),
-                                     angularaxis=dict(gridcolor="rgba(255,255,255,.15)")),
-                          paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E6EDF3"), margin=dict(l=80, r=90, t=20, b=20),
-                          height=330, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+# ------------------------------------------------------------------ Heatmap
+def draw_heatmap(color_by: str, size_by: str):
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        st.warning("ต้องติดตั้ง plotly เพื่อแสดงแผนที่")
+        return
+    recs = []
+    for t in vis:
+        if fund[t]["type"] != "EQUITY" or t not in q_all.index:
+            continue
+        val = {"เปลี่ยนแปลงวันนี้": q_all.loc[t, "Today %"], "เปลี่ยนแปลง 1 เดือน": q_all.loc[t, "1M %"], "คะแนนรวม": tots[t]}[color_by]
+        if val is None or pd.isna(val):
+            continue
+        cap = fund[t]["info"].get("marketCap") or 0
+        recs.append(dict(sec=sector_of(t), t=t, size=float(cap) if size_by == "มูลค่าตลาด" and cap > 0 else 1.0,
+                         val=float(val), cap=cap, name=fund[t]["name"]))
+    if len(recs) < 3:
+        st.info("มีหุ้นน้อยเกินไปสำหรับแผนที่ กดปุ่มโหลดกลุ่มหุ้นด้านซ้าย เช่น S&P 500 หรือ Nasdaq 100 เพื่อเพิ่มหุ้น")
+        return
+    pct = color_by != "คะแนนรวม"
+    rng = 3.0 if color_by == "เปลี่ยนแปลงวันนี้" else 10.0
+    fmt = (lambda v: f"{v:+.1f}%") if pct else (lambda v: f"{v:.0f}")  # noqa: E731
+    ids, labels, parents, values, colors, texts, hovers = [], [], [], [], [], [], []
+    for sec in sorted({r["sec"] for r in recs}):
+        ch = [r for r in recs if r["sec"] == sec]
+        tw = sum(c["size"] for c in ch)
+        ids.append(sec); labels.append(sec); parents.append(""); values.append(tw); texts.append("")
+        colors.append(sum(c["val"] * c["size"] for c in ch) / tw); hovers.append(f"{sec} · {len(ch)} ตัว")
+        for c in ch:
+            t = c["t"]
+            ids.append(f"{sec}/{t}"); labels.append(t); parents.append(sec); values.append(c["size"]); colors.append(c["val"])
+            texts.append(fmt(c["val"]))
+            tot = tots.get(t)
+            hovers.append(f"<b>{t}</b> · {_html.escape(str(c['name']))}<br>{sec}"
+                          + (f"<br>คะแนนรวม {tot:.0f} · {ratings[t]}" if tot is not None else "")
+                          + f"<br>วันนี้ {q_all.loc[t, 'Today %']:+.2f}% · 1 เดือน {q_all.loc[t, '1M %']:+.1f}%"
+                          + (f"<br>มูลค่าตลาด ${c['cap'] / 1e9:,.0f} พันล้าน" if c["cap"] else ""))
+    scale = ([[0, "#e5484d"], [0.5, "#2a2f3d"], [1, "#30a46c"]] if pct else [[0, "#e5484d"], [0.55, "#d29922"], [1, "#30a46c"]])
+    fig = go.Figure(go.Treemap(
+        ids=ids, labels=labels, parents=parents, values=values, text=texts, hovertext=hovers, branchvalues="total",
+        texttemplate="<b>%{label}</b><br>%{text}", hovertemplate="%{hovertext}<extra></extra>", textposition="middle center",
+        textfont=dict(size=15, color="white"), pathbar=dict(visible=False), root_color="rgba(0,0,0,0)", tiling=dict(pad=3, packing="squarify"),
+        marker=dict(colors=colors, colorscale=scale, cmin=-rng if pct else 0, cmax=rng if pct else 100,
+                    pad=dict(t=28, l=3, r=3, b=3), line=dict(width=1.5, color="#0b1224"),
+                    colorbar=dict(title=dict(text="% เปลี่ยนแปลง" if pct else "คะแนน"), thickness=12, len=0.6))))
+    fig.update_layout(height=720, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E6EDF3"))
+    st.plotly_chart(fig, width="stretch")
 
-    sel = st.session_state.get("sel")
-    if sel in scored or sel in others:
-        st.subheader(f"{sel} · {fund[sel]['name']}")
-        cc1, cc2 = st.columns([3, 2])
-        with cc1:
-            tv_widget("advanced-chart", {
-                "autosize": True, "symbol": tv_full(sel), "interval": "D", "timezone": "Asia/Bangkok",
-                "theme": "dark", "style": "1", "locale": "th_TH", "backgroundColor": "rgba(0,0,0,0)",
-                "allow_symbol_change": True, "hide_side_toolbar": False, "support_host": "https://www.tradingview.com"}, 560)
-        with cc2:
-            st.caption(f"กลุ่ม: {sector_of(sel)} · ประกาศงบครั้งถัดไป: {earnings_of(sel)} · จังหวะราคา: {timing_of(sel, q_all)}")
-            if sel in scored:
-                r = scored[sel]
-                tot = tots[sel]
-                st.metric("คะแนนรวม", f"{tot:.0f}/100" if tot is not None else "-", ratings[sel])
-                radar(r["scores"])
-                m = {k: (f"{v:.2f}" if isinstance(v, float) else v) for k, v in r["metrics"].items() if v is not None}
-                st.dataframe(pd.DataFrame({"ค่า": m}), width="stretch")
-                missing = [k for k, v in r["scores"].items() if v is None]
-                if missing:
-                    st.info("ไม่มีข้อมูลสำหรับ: " + ", ".join(missing) + " (ถูกตัดออกจากคะแนนรวมและปรับน้ำหนักใหม่)")
-            else:
-                st.info("ETF ประเภทนี้ (ทอง/ตราสารหนี้/อื่น ๆ) ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟและข่าว")
-        st.markdown(f"**ข่าวของ {sel}**")
-        tv_widget("timeline", {"feedMode": "symbol", "symbol": tv_full(sel), "isTransparent": True, "displayMode": "regular",
-                               "width": "100%", "height": "100%", "colorTheme": "dark", "locale": "th_TH"}, 460)
 
 with tab_heat:
-    src = st.radio("ตลาด", ["S&P 500", "Nasdaq 100"], horizontal=True)
-    tv_widget("stock-heatmap", {
-        "dataSource": "SPX500" if src == "S&P 500" else "NASDAQ100", "grouping": "sector", "blockSize": "market_cap_basic",
-        "blockColor": "change", "locale": "th_TH", "colorTheme": "dark", "hasTopBar": True, "isDataSetEnabled": False,
-        "isZoomEnabled": True, "hasSymbolTooltip": True, "isMonoSize": False, "width": "100%", "height": "100%"}, 680)
+    hm = st.radio("แผนที่", ["หุ้นที่สแกน (อ่านง่าย)", "ทั้งตลาดจาก TradingView"], horizontal=True)
+    if hm.startswith("หุ้นที่สแกน"):
+        h1, h2 = st.columns(2)
+        color_by = h1.radio("สีแสดง", ["เปลี่ยนแปลงวันนี้", "เปลี่ยนแปลง 1 เดือน", "คะแนนรวม"], horizontal=True)
+        size_by = h2.radio("ขนาดกรอบ", ["มูลค่าตลาด", "เท่ากันทุกตัว"], horizontal=True)
+        st.caption("แต่ละกรอบคือหุ้น 1 ตัว จัดกลุ่มตามอุตสาหกรรม · เขียว = ขึ้นหรือคะแนนสูง, แดง = ลงหรือคะแนนต่ำ · "
+                   "กรอบใหญ่ = บริษัทใหญ่ · เลื่อนเมาส์ดูรายละเอียด · ETF ไม่แสดงในแผนที่นี้ · อยากเห็นทั้งตลาดให้กดปุ่ม S&P 500 ที่แถบซ้าย")
+        draw_heatmap(color_by, size_by)
+    else:
+        src = st.radio("ตลาด", ["S&P 500", "Nasdaq 100"], horizontal=True)
+        tv_widget("stock-heatmap", {
+            "dataSource": "SPX500" if src == "S&P 500" else "NASDAQ100", "grouping": "sector", "blockSize": "market_cap_basic",
+            "blockColor": "change", "locale": "th_TH", "colorTheme": "dark", "hasTopBar": True, "isDataSetEnabled": False,
+            "isZoomEnabled": True, "hasSymbolTooltip": True, "isMonoSize": False, "width": "100%", "height": "100%"}, 760)
+        st.caption("แผนที่ทั้งตลาดมีหุ้นเป็นร้อยตัว กรอบจึงเล็ก ใช้เมาส์ล้อเลื่อนซูมเข้าไปดูกลุ่มที่สนใจได้")
 
 with tab_news:
     n1, n2 = st.columns([3, 2])
@@ -408,9 +563,29 @@ with tab_news:
                              "importanceFilter": "-1,0,1", "countryFilter": "us"}, 640)
     st.caption("ข่าวเป็นข้อมูลประกอบการตัดสินใจ ไม่ได้ถูกนำไปคิดคะแนน · ข่าวส่วนใหญ่เป็นภาษาอังกฤษ")
 
-# ------------------------------------------------------------------ วิธีคิดคะแนน
+# ------------------------------------------------------------------ คู่มือ
 with tab3:
     st.markdown("""
+### อ่านแอพนี้ใน 3 ขั้นตอน
+1. **ดูคะแนนรวม (0-100)** คือคุณภาพของธุรกิจ เขียวคือดี เหลือคือกลาง แดงคืออ่อน
+2. **ดูจังหวะราคา** ว่าตอนนี้ราคาอยู่ตรงไหน หุ้นดีที่เพิ่งย่อลงมาน่าจับตากว่าตัวที่ราคาวิ่งขึ้นสุดขีด
+3. **กดดูรายละเอียดและข่าว** ก่อนตัดสินใจทุกครั้ง โดยเฉพาะตัวที่ราคาย่อลึกหรือใกล้ประกาศงบ
+
+### ศัพท์ที่เจอบ่อย
+| คำ | แปลว่า |
+|---|---|
+| ETF | กองทุนที่รวมหุ้นหลายตัวไว้ในตัวเดียว ซื้อขายในตลาดหุ้นได้เหมือนหุ้นตัวหนึ่ง |
+| EPS | กำไรต่อหุ้น |
+| ROIC | เงินลงทุนของบริษัท 100 บาท สร้างกำไรได้ปีละกี่บาท ยิ่งสูงยิ่งบริหารเงินเก่ง |
+| Margin | ขายของ 100 บาท เหลือกำไรกี่บาท |
+| FCF (เงินสดอิสระ) | เงินสดที่เหลือจริงหลังลงทุนต่อ เป็นเงินที่จ่ายปันผล ซื้อหุ้นคืน หรือใช้หนี้ได้ |
+| SBC | ค่าตอบแทนพนักงานที่จ่ายเป็นหุ้น ทำให้ผู้ถือหุ้นเดิมถูกเจือจาง |
+| Moat | ปราการที่ทำให้คู่แข่งแย่งลูกค้ายาก เช่น คนใช้เยอะจนต้องใช้ตาม, ย้ายค่ายลำบาก |
+| P/E, PEG | ราคาหุ้นเป็นกี่เท่าของกำไร (PEG ปรับตามความเร็วการโต ต่ำกว่า ~1.2 ถือว่าไม่แพง) |
+| MA200 | ราคาเฉลี่ย 200 วัน ถ้าราคาอยู่ต่ำกว่า แปลว่าแนวโน้มยังเป็นขาลง |
+| RSI | ตัวชี้วัดว่าราคาลงแรงเกินไปหรือยัง ต่ำกว่า 30-40 คือลงมาเยอะ |
+
+---
 **แต่ละเกณฑ์ให้คะแนน 0-100 แล้วถ่วงน้ำหนักตามแถบด้านซ้าย** (ใช้งบรายปีย้อนหลัง ~4 ปีจาก Yahoo Finance)
 
 น้ำหนักตั้งต้น: Revenue 12 · EPS 12 · ROIC 15 · Margin 10 · FCF 15 · Balance Sheet 8 · Moat 10 · Valuation 18
@@ -436,3 +611,8 @@ with tab3:
 
 **ข้อจำกัดที่ควรรู้:** Moat วัดจากตัวเลขตรง ๆ ไม่ได้ จึงพึ่งวิจารณญาณของคุณ · งบรายปีของ Yahoo มีแค่ ~4 ปี CAGR จึงเป็น 3 ช่วง · แอพนี้เป็นตัวคัดกรองเบื้องต้น ไม่ใช่คำแนะนำการลงทุน
 """)
+
+# เปิดหน้าต่างรายละเอียดหลังผู้ใช้กดการ์ด/แถว (ทำครั้งเดียวต่อการคลิก)
+_open = st.session_state.pop("open_detail", None)
+if _open and (_open in scored or _open in others):
+    detail_dialog(_open)
