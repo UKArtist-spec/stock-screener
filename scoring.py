@@ -349,7 +349,7 @@ def explain_rows(scores: dict, m: dict) -> list[tuple[str, float | None, str]]:
     txt["Margin"] = (f"ขายของ 100 บาท เหลือกำไรจากการดำเนินงาน {f(m.get('Op margin %'))} บาท" if f(m.get("Op margin %")) else "ไม่มีข้อมูล")
     txt["FCF"] = (f"เงินสดอิสระโตเฉลี่ย {f(m.get('FCF CAGR %'))}% ต่อปี" if f(m.get("FCF CAGR %")) else "เงินสดอิสระต่ำหรือติดลบ")
     y = m.get("ปีที่ FCF ล้างหนี้สุทธิ")
-    txt["Balance Sheet"] = ("มีเงินสดมากกว่าหนี้" if y == 0 else (f"ใช้เงินสดอิสระราว {y:.1f} ปีก็ล้างหนี้สุทธิได้" if y else "ไม่มีข้อมูล/ภาระหนี้สูง"))
+    txt["Balance Sheet"] = ("มีเงินสดมากกว่าหนี้" if y == 0 else "หนี้สุทธิน้อยมาก ล้างได้ภายในไม่กี่เดือน" if y is not None and y < 0.5 else (f"ใช้เงินสดอิสระราว {y:.1f} ปีก็ล้างหนี้สุทธิได้" if y else "ไม่มีข้อมูล/ภาระหนี้สูง"))
     txt["Moat"] = f"ปัจจัยที่ทำให้แข่งขันยาก: {m['Moat']}" if m.get("Moat") not in (None, "proxy") else "ประเมินจากอัตรากำไรและ ROIC เท่านั้น"
     peg, pe = m.get("PEG"), m.get("Forward P/E") or m.get("Trailing P/E")
     if peg:

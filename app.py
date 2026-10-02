@@ -19,9 +19,15 @@ import importlib  # noqa: E402
 
 S = importlib.reload(S)
 D = importlib.reload(D)
-if not hasattr(S, "CRITERIA_TH") or not hasattr(S, "plain_summary") or not hasattr(D, "GROUPS"):
-    st.error("ไฟล์บน GitHub ไม่ครบเวอร์ชันใหม่: ต้องอัปโหลด app.py, scoring.py, data.py และ requirements.txt ทั้ง 4 ไฟล์พร้อมกัน "
-             "แล้วกด Manage app > Reboot app")
+try:
+    import growth_ai as G  # noqa: E402
+
+    G = importlib.reload(G)
+except ImportError:
+    G = None
+if G is None or not hasattr(S, "CRITERIA_TH") or not hasattr(D, "_vs_ema") or not hasattr(G, "analyze"):
+    st.error("ไฟล์บน GitHub ไม่ครบเวอร์ชันใหม่: ต้องอัปโหลด app.py, scoring.py, data.py, growth_ai.py และ requirements.txt "
+             "ทั้ง 5 ไฟล์พร้อมกัน แล้วกด Manage app > Reboot app")
     st.stop()
 DEMO_ENV = os.environ.get("DEMO") == "1"
 
@@ -49,6 +55,16 @@ st.markdown("""<style>
 .bd {display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 600; margin: 8px 4px 0 0;}
 .vc-p {font-size: 1.05rem; font-weight: 600; margin-top: 8px;} .vc-s {font-size: .78rem; opacity: .85; line-height: 1.45; min-height: 4.4em; margin-top: 4px;}
 .vc-x {font-size: .72rem; opacity: .6;}
+.lane-h {border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; border: 1px solid rgba(255,255,255,.12);}
+.lane-h b {font-size: 1.15rem;} .lane-h div {font-size: .78rem; opacity: .8; margin-top: 2px;}
+.ac {background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(255,255,255,.02)); border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px; padding: 12px 14px 8px 14px; margin-bottom: 4px;}
+.ac-top {display: flex; justify-content: space-between; align-items: center;}
+.ac-t {font-size: 1.15rem; font-weight: 800;} .ac-n {font-size: .72rem; opacity: .65; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.mb {display: flex; align-items: center; gap: 6px; font-size: .72rem; margin-top: 5px;}
+.mb span:first-child {width: 108px; opacity: .8;} .mb .tr {flex: 1; height: 6px; border-radius: 4px; background: rgba(255,255,255,.10); overflow: hidden;}
+.mb .fl {height: 100%; border-radius: 4px;} .mb span:last-child {width: 24px; text-align: right; opacity: .85;}
+.ac-s {font-size: .74rem; opacity: .85; line-height: 1.4; margin-top: 6px;}
 </style>""", unsafe_allow_html=True)
 
 
@@ -228,8 +244,44 @@ with st.sidebar:
     sector_sel = st.multiselect("กรองกลุ่มอุตสาหกรรม", all_sectors, placeholder="ทั้งหมด")
 
 
+with st.sidebar:
+    ema_sel = st.radio("กรองด้วยเส้น EMA100", ["ทั้งหมด", "เหนือ EMA100", "ต่ำกว่า EMA100"],
+                       help="EMA100 = ราคาเฉลี่ยถ่วงน้ำหนัก 100 วัน ราคาอยู่เหนือเส้น = แนวโน้มระยะกลางเป็นขาขึ้น ต่ำกว่า = ขาลง")
+
+
+def ema_of(t: str):
+    if t in q_all.index and "vs EMA100 %" in q_all.columns:
+        v = q_all.loc[t, "vs EMA100 %"]
+        return None if pd.isna(v) else float(v)
+    return None
+
+
 def in_sector(t: str) -> bool:
-    return not sector_sel or sector_of(t) in sector_sel
+    if sector_sel and sector_of(t) not in sector_sel:
+        return False
+    if ema_sel != "ทั้งหมด":
+        v = ema_of(t)
+        if v is None or (v >= 0) != (ema_sel == "เหนือ EMA100"):
+            return False
+    return True
+
+
+ai = {t: G.analyze(fund[t]["fin"], fund[t]["info"], ema_of(t)) for t in scored if fund[t]["type"] == "EQUITY"}
+
+
+def ema_badge(t: str) -> str:
+    v = ema_of(t)
+    if v is None:
+        return ""
+    return (f'<span class="bd" style="background:{"#1f6f5a" if v >= 0 else "#8a2e2e"}">'
+            f'{"เหนือ" if v >= 0 else "ต่ำกว่า"} EMA100 {v:+.1f}%</span>')
+
+
+def type_badge(t: str) -> str:
+    if t not in ai:
+        return ""
+    ty = ai[t]["type"]
+    return f'<span class="bd" style="background:{G.TYPE_COLOR[ty]}">{_html.escape(ty if ty in G.TYPES else "ไม่ใช่หุ้นเติบโต")}</span>'
 
 
 # ------------------------------------------------------------------ KPI + Top 5
@@ -305,7 +357,7 @@ def card_html(r: dict) -> str:
         extra.append(f"ประกาศงบอีก {d} วัน")
     return (f'<div class="vc"><div class="vc-top"><div><div class="vc-t">{_html.escape(t)}</div>'
             f'<div class="vc-n">{_html.escape(str(r.get("ชื่อ", "")))}</div></div>{ring}</div>'
-            f'<div>{b_status}{b_time}{etf}</div><div class="vc-p">{pline}</div>{spark_svg(r.get("1Y trend"))}'
+            f'<div>{b_status}{b_time}{etf}{type_badge(t)}{ema_badge(t)}</div><div class="vc-p">{pline}</div>{spark_svg(r.get("1Y trend"))}'
             f'<div class="vc-s">{_html.escape(summ)}</div><div class="vc-x">{_html.escape(" · ".join(extra))}</div></div>')
 
 
@@ -324,6 +376,66 @@ def radar(scores: dict):
                       paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E6EDF3"), margin=dict(l=80, r=80, t=20, b=20),
                       height=340, showlegend=False)
     st.plotly_chart(fig, width="stretch")
+
+
+def _secret(name: str, default=None):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:  # noqa: BLE001  ยังไม่ได้ตั้ง secrets
+        return default
+
+
+def mini_bars(a: dict) -> str:
+    out = []
+    for k in G.CHECKS:
+        v = a["checks"][k]["score"]
+        col = "#30a46c" if (v or 0) >= 65 else ("#d29922" if (v or 0) >= 40 else "#e5484d")
+        out.append(f'<div class="mb"><span>{G.CHECK_TH[k]}</span><div class="tr"><div class="fl" style="width:{v or 0:.0f}%;'
+                   f'background:{col}"></div></div><span>{_fmt0(v)}</span></div>')
+    return "".join(out)
+
+
+def _fmt0(v):
+    return "-" if v is None else f"{v:.0f}"
+
+
+def ai_section(sel: str):
+    a = ai[sel]
+    st.markdown("---")
+    st.markdown("#### AI คัดกรองหุ้นเติบโต")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(f"ประเภท (ความมั่นใจ{a['confidence']})", a["type"] if a["type"] in G.TYPES else "ไม่ใช่หุ้นเติบโต")
+    m2.metric("คะแนน AI", _fmt0(a["score"]) + "/100", help="ถ่วงน้ำหนัก 4 คำถามตามประเภทหุ้น")
+    m3.metric("ผลคัดกรอง", a["verdict"])
+    m4.metric("เส้น EMA100", "เหนือเส้น" if a["ema"]["above"] else ("ต่ำกว่าเส้น" if a["ema"]["above"] is False else "-"),
+              f"{a['vs_ema100']:+.1f}%" if a["vs_ema100"] is not None else None)
+    st.markdown(f"**{G.TYPE_TH[a['type']]}**" + (f" · ข้อสังเกต: {', '.join(a['flags'])}" if a["flags"] else ""))
+    cols = st.columns(4)
+    for c, k in zip(cols, G.CHECKS):
+        ch = a["checks"][k]
+        with c:
+            st.markdown(f"**{G.CHECK_TH[k]}** · {_fmt0(ch['score'])}/100")
+            st.caption(ch["verdict"])
+            for rr in ch.get("reasons", [])[:4]:
+                st.markdown(f"<div style='font-size:.78rem;opacity:.85;margin-bottom:4px'>• {_html.escape(rr)}</div>", unsafe_allow_html=True)
+    if a["ema"]["note"]:
+        st.caption(f"EMA100: {a['ema']['label']} · {a['ema']['note']}")
+
+    key = _secret("ANTHROPIC_API_KEY")
+    model = _secret("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+    ck = f"claude_{sel}"
+    if key:
+        if st.button("ให้ Claude วิเคราะห์เชิงลึก", key=f"btn_{ck}", type="primary"):
+            with st.spinner("Claude กำลังวิเคราะห์... (ประมาณ 10-30 วินาที)"):
+                try:
+                    st.session_state[ck] = G.ask_claude(key, model, G.build_payload(sel, fund[sel]["name"], fund[sel]["info"], a))
+                except Exception as e:  # noqa: BLE001
+                    st.session_state[ck] = f"วิเคราะห์ไม่สำเร็จ: {e}"
+        if st.session_state.get(ck):
+            with st.container(border=True):
+                st.markdown(st.session_state[ck])
+    else:
+        st.caption("อยากได้บทวิเคราะห์เชิงลึกจาก Claude ใส่ ANTHROPIC_API_KEY ใน Manage app > Settings > Secrets (ดูวิธีในแท็บคู่มือ)")
 
 
 @st.dialog("รายละเอียดหุ้น", width="large")
@@ -350,6 +462,8 @@ def detail_dialog(sel: str):
             radar(r["scores"])
         else:
             st.info("ETF ประเภทนี้ไม่มีงบการเงินให้คะแนน ดูได้เฉพาะกราฟและข่าว")
+    if sel in ai:
+        ai_section(sel)
     if sel in scored:
         st.markdown("**คะแนนแต่ละด้าน แปลเป็นภาษาคน**")
         exp = pd.DataFrame(S.explain_rows(r["scores"], r["metrics"]), columns=["เกณฑ์", "คะแนน", "หมายความว่า"])
@@ -364,7 +478,7 @@ def detail_dialog(sel: str):
     st.caption("คะแนนเป็นข้อมูลคัดกรองเบื้องต้น ไม่ใช่คำแนะนำให้ซื้อหรือขาย")
 
 
-tab1, tab_heat, tab_news, tab3 = st.tabs(["Screener", "Heatmap ตลาด", "ข่าวตลาด", "คู่มือ & วิธีคิดคะแนน"])
+tab1, tab_ai, tab_heat, tab_news, tab3 = st.tabs(["Screener", "AI หุ้นเติบโต", "Heatmap ตลาด", "ข่าวตลาด", "คู่มือ & วิธีคิดคะแนน"])
 
 # ------------------------------------------------------------------ Tab 1
 with tab1:
@@ -383,7 +497,8 @@ with tab1:
 
         def base_row(t):
             row = {"Ticker": t, "ชื่อ": fund[t]["name"], "กลุ่ม": sector_of(t), "ประกาศงบ": earnings_of(t),
-                   "จังหวะราคา": timing_of(t, q)}
+                   "จังหวะราคา": timing_of(t, q), "ประเภทการเติบโต": ai[t]["type"] if t in ai else "-",
+                   "AI คัดกรอง": ai[t]["verdict"] if t in ai else "-"}
             if t in q.index:
                 row.update(q.loc[t].to_dict())
             return row
@@ -442,7 +557,8 @@ with tab1:
         move = (["Today %"] if period == "รายวัน" else ["1M %"]) + ["From 52w high %"]
         trend = ["1Y trend"]
         score_cols = ["คะแนนรวม"] + S.CRITERIA
-        cols = ["Ticker", "คะแนนรวม", "สถานะ", "จังหวะราคา", "จุดเด่น / จุดอ่อน", "กลุ่ม", "ชื่อ", "Price"] + move + ["ประกาศงบ"] + trend
+        cols = (["Ticker", "คะแนนรวม", "สถานะ", "ประเภทการเติบโต", "AI คัดกรอง", "จังหวะราคา", "vs EMA100 %", "จุดเด่น / จุดอ่อน",
+                 "กลุ่ม", "ชื่อ", "Price"] + move + ["ประกาศงบ"] + trend)
         if not compact:
             cols += S.CRITERIA + ["vs MA200 %", "RSI"]
         cols = [c for c in cols if c in df]
@@ -451,6 +567,7 @@ with tab1:
                "Price": st.column_config.NumberColumn("ราคา", format="$%.2f"),
                "From 52w high %": st.column_config.NumberColumn("ห่างจาก High 52 สัปดาห์", format="%.1f%%"),
                "vs MA200 %": st.column_config.NumberColumn("เทียบ MA200", format="%.1f%%"),
+               "vs EMA100 %": st.column_config.NumberColumn("เทียบ EMA100", format="%+.1f%%", help="บวก = ราคาอยู่เหนือเส้น EMA100"),
                "RSI": st.column_config.NumberColumn("RSI(14)", format="%.0f"),
                "1Y trend": st.column_config.LineChartColumn("แนวโน้ม 1 ปี"),
                "จุดเด่น / จุดอ่อน": st.column_config.TextColumn("จุดเด่น / จุดอ่อน", width="large")}
@@ -475,7 +592,7 @@ with tab1:
         view = df[cols]
         sc = [c for c in score_cols if c in view]
         styled = (view.style.map(shade, subset=sc)
-                  .map(move_color, subset=[c for c in move if c in view and c != "From 52w high %"])
+                  .map(move_color, subset=[c for c in move if c in view and c != "From 52w high %"] + [c for c in ["vs EMA100 %"] if c in view])
                   .format({c: "{:.0f}" for c in sc}, na_rep="-"))
         c_a, c_b = st.columns([5, 1])
         c_a.caption("คลิกช่องซ้ายสุดของแถว เพื่อเปิดหน้าต่างรายละเอียด กราฟ และข่าว")
@@ -493,6 +610,90 @@ with tab1:
     table()
     if failed:
         st.warning(f"ดึงข้อมูลไม่ได้/ข้อมูลไม่พอ: {', '.join(failed)}")
+
+# ------------------------------------------------------------------ AI หุ้นเติบโต
+def ai_card(t: str) -> str:
+    a = ai[t]
+    sc = a["score"]
+    col = "#30a46c" if (sc or 0) >= 70 else ("#d29922" if (sc or 0) >= 55 else "#e5484d")
+    ring = (f'<div style="width:52px;height:52px;border-radius:50%;background:conic-gradient({col} {sc or 0:.0f}%,rgba(255,255,255,.12) 0);'
+            f'display:flex;align-items:center;justify-content:center"><div style="width:40px;height:40px;border-radius:50%;background:#0c1428;'
+            f'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.9rem;color:{col}">{_fmt0(sc)}</div></div>')
+    price = ""
+    if t in q_all.index:
+        p, c = q_all.loc[t, "Price"], q_all.loc[t, "Today %"]
+        price = f'${p:,.2f} <span style="color:{"#30a46c" if c >= 0 else "#e5484d"}">{c:+.2f}%</span>'
+    return (f'<div class="ac"><div class="ac-top"><div><div class="ac-t">{_html.escape(t)}</div>'
+            f'<div class="ac-n">{_html.escape(fund[t]["name"])}</div><div style="font-size:.85rem;margin-top:2px">{price}</div></div>{ring}</div>'
+            f'<div><span class="bd" style="background:{G.VERDICT_COLOR[a["verdict"]]}">{a["verdict"]}</span>{ema_badge(t)}</div>'
+            f'{mini_bars(a)}<div class="ac-s">{_html.escape(G.one_liner(a))}'
+            + (f'<br><span style="color:#e3b341">{_html.escape(" · ".join(a["flags"]))}</span>' if a["flags"] else "")
+            + '</div></div>')
+
+
+with tab_ai:
+    st.markdown("##### AI จัดกลุ่มหุ้นเติบโตเป็น 3 แบบ แล้วตอบ 4 คำถามก่อนคัดกรอง")
+    st.caption("คำถาม: (1) Growth มาจาก Demand จริงหรือรอบสั้น · (2) Margin โตตามรายได้ไหม · (3) ราคาแพงไปหรือยัง · "
+               "(4) พึ่งเงินทุนหรือพึ่งวัฏจักรแค่ไหน · พร้อมเช็กว่าราคาอยู่เหนือหรือต่ำกว่าเส้น EMA100 "
+               "(ตัวกรอง EMA100 และกลุ่มอุตสาหกรรมอยู่ที่แถบซ้าย)")
+    a1, a2, a3 = st.columns([2, 2, 1])
+    v_sel = a1.multiselect("ผลคัดกรอง", [G.PASS, G.WATCH, G.FAIL], default=[G.PASS, G.WATCH])
+    ai_view = a2.radio("มุมมอง", ["แยก 3 กลุ่ม", "ตาราง"], horizontal=True, key="ai_view")
+    show_all = a3.toggle("แสดงทุกตัว", value=False, help="ปกติแสดง 6 อันดับแรกต่อกลุ่ม")
+    pool = [t for t in ai if in_sector(t) and ai[t]["verdict"] in v_sel]
+    k = st.columns(4)
+    for c, ty in zip(k, G.TYPES):
+        all_ty = [t for t in ai if in_sector(t) and ai[t]["type"] == ty]
+        c.metric(ty, f"{sum(1 for t in all_ty if ai[t]['verdict'] == G.PASS)} ผ่าน / {len(all_ty)} ตัว")
+    below = [t for t in ai if in_sector(t) and ai[t]["type"] in G.TYPES and ai[t]["ema"]["above"] is False]
+    k[3].metric("ต่ำกว่า EMA100", f"{len(below)} ตัว", help="หุ้นเติบโตที่ราคาอยู่ใต้เส้น EMA100 (แนวโน้มระยะกลางเป็นขาลง)")
+
+    if ai_view == "แยก 3 กลุ่ม":
+        lanes = st.columns(3)
+        for lane, ty in zip(lanes, G.TYPES):
+            with lane:
+                st.markdown(f'<div class="lane-h" style="background:linear-gradient(135deg,{G.TYPE_COLOR[ty]}cc,{G.TYPE_COLOR[ty]}33)">'
+                            f'<b>{ty}</b><div>{G.TYPE_TH[ty]}</div></div>', unsafe_allow_html=True)
+                lst = sorted([t for t in pool if ai[t]["type"] == ty], key=lambda t: -(ai[t]["score"] or 0))
+                if not lst:
+                    st.caption("ไม่มีหุ้นที่ตรงเงื่อนไขในกลุ่มนี้")
+                for t in (lst if show_all else lst[:6]):
+                    st.markdown(ai_card(t), unsafe_allow_html=True)
+                    if st.button("อ่านบทวิเคราะห์ AI", key=f"ai_{t}", width="stretch"):
+                        st.session_state["open_detail"] = t
+                        st.rerun()
+                if not show_all and len(lst) > 6:
+                    st.caption(f"อีก {len(lst) - 6} ตัว เปิด 'แสดงทุกตัว' เพื่อดู")
+    else:
+        rows = []
+        for t in pool:
+            a = ai[t]
+            rows.append({"Ticker": t, "ชื่อ": fund[t]["name"], "ประเภท": a["type"], "คะแนน AI": a["score"], "ผลคัดกรอง": a["verdict"],
+                         **{G.CHECK_TH[k]: a["checks"][k]["score"] for k in G.CHECKS},
+                         "เทียบ EMA100 %": a["vs_ema100"], "จังหวะเข้า": a["entry"], "ข้อสังเกต": ", ".join(a["flags"]),
+                         "สรุป": G.one_liner(a)})
+        if rows:
+            tdf = pd.DataFrame(rows).sort_values("คะแนน AI", ascending=False).reset_index(drop=True)
+            cfg = {c: st.column_config.ProgressColumn(c, min_value=0, max_value=100, format="%.0f")
+                   for c in ["คะแนน AI"] + [G.CHECK_TH[k] for k in G.CHECKS]}
+            cfg["Ticker"] = st.column_config.TextColumn("Ticker", pinned=True)
+            cfg["เทียบ EMA100 %"] = st.column_config.NumberColumn("เทียบ EMA100", format="%+.1f%%")
+            ev = st.dataframe(tdf, column_config=cfg, hide_index=True, width="stretch", height=560,
+                              on_select="rerun", selection_mode="single-row", key="ai_tbl")
+            sel_rows = list(ev.selection.rows) if ev is not None and ev.selection else []
+            if sel_rows != st.session_state.get("_ai_last"):
+                st.session_state["_ai_last"] = sel_rows
+                if sel_rows:
+                    st.session_state["open_detail"] = tdf.iloc[sel_rows[0]]["Ticker"]
+                    st.rerun()
+            st.download_button("ดาวน์โหลด CSV", tdf.to_csv(index=False).encode("utf-8-sig"), file_name="ai_growth_screen.csv",
+                               mime="text/csv")
+        else:
+            st.info("ไม่มีหุ้นที่ตรงเงื่อนไข ลองเพิ่มผลคัดกรอง 'ไม่ผ่าน' หรือเปลี่ยนตัวกรองที่แถบซ้าย")
+    n_none = sum(1 for t in ai if in_sector(t) and ai[t]["type"] == G.NONE)
+    st.caption(f"ไม่เข้าข่ายหุ้นเติบโต {n_none} ตัว (รายได้โตช้าหรือหดตัว) · ETF ไม่ถูกจัดกลุ่มเพราะเป็นกองทุน · "
+               "การจัดกลุ่มใช้กฎที่เขียนไว้ชัดเจนจากงบ 4 ปีของ Yahoo ส่วนปุ่ม 'ให้ Claude วิเคราะห์เชิงลึก' ในหน้ารายละเอียดใช้ AI จริง")
+
 
 # ------------------------------------------------------------------ Heatmap
 def draw_heatmap(color_by: str, size_by: str):
@@ -602,6 +803,27 @@ with tab3:
 2. **ดูจังหวะราคา** ว่าตอนนี้ราคาอยู่ตรงไหน หุ้นดีที่เพิ่งย่อลงมาน่าจับตากว่าตัวที่ราคาวิ่งขึ้นสุดขีด
 3. **กดดูรายละเอียดและข่าว** ก่อนตัดสินใจทุกครั้ง โดยเฉพาะตัวที่ราคาย่อลึกหรือใกล้ประกาศงบ
 
+### AI คัดกรองหุ้นเติบโต
+| ประเภท | ลักษณะ | สิ่งที่ AI ให้น้ำหนักมาก |
+|---|---|---|
+| Stable Growth | รายได้โตทุกปี 5-25% ผันผวนต่ำ | Demand ต่อเนื่อง และราคาไม่แพงเกิน |
+| Explosive Growth | รายได้โต 25%+ ต่อปี | Demand จริงหรือรอบสั้น และพึ่งเงินระดมทุนแค่ไหน |
+| Cyclical Growth | อยู่ในอุตสาหกรรมที่ขึ้นลงตามรอบ เช่น พลังงาน วัตถุดิบ ชิปหน่วยความจำ หรือยอดขายเคยหด | ช่วงของรอบ และ P/E ต่ำที่อาจเป็นกับดัก |
+
+**4 คำถาม:** (1) Demand จริงไหม ดูว่ารายได้โตต่อเนื่อง ไม่ใช่พุ่งปีเดียว และอัตรากำไรขั้นต้นไม่ลด
+(2) Margin โตตามรายได้ไหม ดูอัตรากำไรจากการดำเนินงานขยายตัว และกำไรต่อหุ้นโตเร็วกว่ารายได้
+(3) ราคาแพงหรือยัง ดู PEG, FCF yield และมูลค่ากิจการต่อยอดขายเทียบการเติบโต
+(4) พึ่งเงินทุน/วัฏจักร ดูปีที่เงินสดอิสระติดลบ, ค่าใช้จ่ายลงทุน, การออกหุ้นหรือกู้เพิ่ม, ความผันผวนของยอดขาย และกลุ่มอุตสาหกรรม
+
+**ผลคัดกรอง:** ผ่านคัดกรอง = คะแนน AI 70+ · เฝ้าดู = 55-69 หรือธุรกิจดีแต่ราคาแพง/ยังพึ่งเงินระดมทุน · ไม่ผ่าน = ต่ำกว่า 55 หรือ Demand ยังไม่น่าเชื่อถือ
+
+**EMA100:** ราคาเฉลี่ยถ่วงน้ำหนัก 100 วันทำการ (ราว 5 เดือน) ราคาอยู่เหนือเส้น = ขาขึ้นระยะกลาง ต่ำกว่าเส้น = ขาลง
+หุ้นที่ผ่านคัดกรองและราคาย่อมาใกล้เส้นแต่ยังอยู่เหนือเส้น มักเป็นจังหวะที่ความเสี่ยงต่อผลตอบแทนดี
+
+**เปิดใช้ Claude วิเคราะห์เชิงลึก (ไม่บังคับ มีค่าใช้จ่ายตามการใช้งาน):** สมัครและสร้าง API key ที่ console.anthropic.com
+แล้วใน Streamlit กด Manage app > Settings > Secrets วางข้อความ `ANTHROPIC_API_KEY = "sk-ant-..."` แล้วกด Save
+ถ้าต้องการเปลี่ยนโมเดล เพิ่มบรรทัด `ANTHROPIC_MODEL = "ชื่อโมเดล"` · API key เก็บใน Secrets จึงไม่ปรากฏบน GitHub
+
 ### ศัพท์ที่เจอบ่อย
 | คำ | แปลว่า |
 |---|---|
@@ -615,6 +837,8 @@ with tab3:
 | P/E, PEG | ราคาหุ้นเป็นกี่เท่าของกำไร (PEG ปรับตามความเร็วการโต ต่ำกว่า ~1.2 ถือว่าไม่แพง) |
 | MA200 | ราคาเฉลี่ย 200 วัน ถ้าราคาอยู่ต่ำกว่า แปลว่าแนวโน้มยังเป็นขาลง |
 | RSI | ตัวชี้วัดว่าราคาลงแรงเกินไปหรือยัง ต่ำกว่า 30-40 คือลงมาเยอะ |
+| EMA100 | ราคาเฉลี่ย 100 วันแบบให้น้ำหนักวันล่าสุดมากกว่า ใช้ดูแนวโน้มระยะกลาง |
+| Operating leverage | กำไรโตเร็วกว่ายอดขาย เพราะต้นทุนคงที่ไม่ได้เพิ่มตาม |
 
 ---
 **แต่ละเกณฑ์ให้คะแนน 0-100 แล้วถ่วงน้ำหนักตามแถบด้านซ้าย** (ใช้งบรายปีย้อนหลัง ~4 ปีจาก Yahoo Finance)

@@ -183,6 +183,12 @@ def _fetch_real(ticker: str) -> dict:
         "sbc": _row(cf, "Stock Based Compensation"),
         "net_income": _row(inc, "Net Income", "Net Income Common Stockholders"),
         "shares": _row(inc, "Diluted Average Shares", "Basic Average Shares"),
+        # สำหรับ AI คัดกรองหุ้นเติบโต: การพึ่งพาเงินทุน
+        "ocf": _row(cf, "Operating Cash Flow"),
+        "capex": _row(cf, "Capital Expenditure"),
+        "stock_issued": _row(cf, "Issuance Of Capital Stock", "Common Stock Issuance"),
+        "debt_issued": _row(cf, "Issuance Of Debt", "Long Term Debt Issuance"),
+        "debt_repaid": _row(cf, "Repayment Of Debt", "Long Term Debt Payments"),
     }
     if fin["invested_capital"] is None:
         eq = _row(bal, "Stockholders Equity", "Total Equity Gross Minority Interest")
@@ -212,8 +218,9 @@ def _fetch_demo(ticker: str) -> dict:
         w = rng.dirichlet(np.ones(5)) * 0.4
         return {"ticker": ticker, "info": {"quoteType": "ETF"}, "type": "ETF", "name": f"{ticker} (demo ETF)",
                 "fin": {}, "holdings": dict(zip(picks, map(float, w))), "next_earnings": None}
-    g = rng.uniform(0.0, 0.25)
-    rev = series(rng.uniform(5e9, 2e11), g)
+    kind = rng.choice(["stable", "explosive", "cyclical"], p=[0.5, 0.25, 0.25])
+    g = {"stable": rng.uniform(0.04, 0.18), "explosive": rng.uniform(0.28, 0.7), "cyclical": rng.uniform(0.0, 0.12)}[kind]
+    rev = series(rng.uniform(5e9, 2e11), g, 0.18 if kind == "cyclical" else 0.03)
     margin = rng.uniform(0.05, 0.4)
     ebit = rev * margin * np.linspace(0.9, 1.05, 4)
     debt = pd.Series(rev.iloc[-1] * rng.uniform(0, 0.6), index=yrs) * np.ones(4)
@@ -225,10 +232,16 @@ def _fetch_demo(ticker: str) -> dict:
         "invested_capital": rev * rng.uniform(0.25, 0.8), "fcf": ebit * rng.uniform(0.6, 0.9) * np.linspace(0.85, 1.1, 4),
         "sbc": ebit * rng.uniform(0.02, 0.3), "net_income": ebit * 0.8,
         "shares": series(rng.uniform(5e8, 5e9), rng.uniform(-0.02, 0.03), 0.005),
+        "ocf": ebit * 1.1, "capex": -rev * rng.uniform(0.02, 0.2),
+        "stock_issued": rev * rng.uniform(0, 0.05 if kind == "explosive" else 0.005),
+        "debt_issued": rev * rng.uniform(0, 0.1), "debt_repaid": -rev * rng.uniform(0, 0.08),
     }
     sectors = ["Technology", "Healthcare", "Financial Services", "Consumer Cyclical", "Energy", "Industrials"]
     info = {"quoteType": "EQUITY", "sector": sectors[int(rng.integers(0, len(sectors)))], "forwardPE": float(rng.uniform(15, 55)),
-            "trailingPE": float(rng.uniform(15, 60)), "marketCap": float(rev.iloc[-1] * rng.uniform(4, 14))}
+            "trailingPE": float(rng.uniform(15, 60)), "marketCap": float(rev.iloc[-1] * rng.uniform(4, 14)),
+            "beta": float(rng.uniform(0.7, 1.9)), "revenueGrowth": float(rev.pct_change().iloc[-1] + rng.normal(0, 0.05)),
+            "enterpriseToRevenue": float(rng.uniform(2, 18)),
+            "industry": "Oil & Gas E&P" if kind == "cyclical" and rng.random() < 0.5 else "Software - Application"}
     return {"ticker": ticker, "info": info, "type": "EQUITY", "name": f"{ticker} (demo)", "fin": fin, "holdings": None,
             "next_earnings": (pd.Timestamp.now() + pd.Timedelta(days=int(rng.integers(2, 80)))).date().isoformat()}
 
@@ -250,6 +263,13 @@ def _vs_ma200(s: pd.Series):
     return float((s.iloc[-1] / s.rolling(200).mean().iloc[-1] - 1) * 100) if len(s) >= 200 else float("nan")
 
 
+def _vs_ema(s: pd.Series, n: int = 100):
+    """ราคาเทียบเส้น EMA n วัน (%) บวก = อยู่เหนือเส้น"""
+    if len(s) < n:
+        return float("nan")
+    return float((s.iloc[-1] / s.ewm(span=n, adjust=False).mean().iloc[-1] - 1) * 100)
+
+
 def _rsi(s: pd.Series, n: int = 14):
     d = s.diff()
     up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
@@ -259,13 +279,14 @@ def _rsi(s: pd.Series, n: int = 14):
 
 def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
     """ราคาล่าสุด + % เปลี่ยนแปลงวันนี้ / 1 เดือน / ห่างจากจุดสูงสุด 52 สัปดาห์ (Yahoo ฟรีดีเลย์ ~15 นาที)"""
-    cols = ["Price", "Today %", "1M %", "From 52w high %", "1Y trend", "vs MA200 %", "RSI"]
+    cols = ["Price", "Today %", "1M %", "From 52w high %", "1Y trend", "vs MA200 %", "RSI", "vs EMA100 %"]
     if demo:
         rows = {}
         for t in tickers:
             r = np.random.default_rng(zlib.crc32(t.encode()) + int(pd.Timestamp.now().timestamp() // 30))
             rows[t] = [float(r.uniform(50, 600)), float(r.normal(0, 1.2)), float(r.normal(1, 5)), float(-abs(r.normal(8, 8))),
-                        list(np.cumsum(r.normal(0.2, 2, 60)) + 100), float(r.normal(4, 10)), float(r.uniform(25, 75))]
+                        list(np.cumsum(r.normal(0.2, 2, 60)) + 100), float(r.normal(4, 10)), float(r.uniform(25, 75)),
+                        float(r.normal(2, 7))]
         return pd.DataFrame.from_dict(rows, orient="index", columns=cols)
     import yfinance as yf
 
@@ -278,5 +299,5 @@ def fetch_quotes(tickers: list[str], demo: bool = False) -> pd.DataFrame:
         if len(s) < 25:
             continue
         rows[t] = [float(s.iloc[-1]), (s.iloc[-1] / s.iloc[-2] - 1) * 100, (s.iloc[-1] / s.iloc[-22] - 1) * 100,
-                   (s.iloc[-1] / s.max() - 1) * 100, s.iloc[-260:].iloc[::5].round(2).tolist(), _vs_ma200(s), _rsi(s)]
+                   (s.iloc[-1] / s.max() - 1) * 100, s.iloc[-260:].iloc[::5].round(2).tolist(), _vs_ma200(s), _rsi(s), _vs_ema(s, 100)]
     return pd.DataFrame.from_dict(rows, orient="index", columns=cols)
